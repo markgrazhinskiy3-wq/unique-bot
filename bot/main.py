@@ -150,6 +150,7 @@ async def process_image_message(
             document=io.BytesIO(result_bytes),
             filename=out_filename,
             caption=caption,
+            disable_content_type_detection=True,
         )
     except asyncio.TimeoutError:
         await status_msg.edit_text(MSG_TIMEOUT)
@@ -199,6 +200,7 @@ async def process_video_message(
             document=io.BytesIO(result_bytes),
             filename=out_filename,
             caption=caption,
+            disable_content_type_detection=True,
         )
     except asyncio.TimeoutError:
         logger.error(f"Video processing timeout for {filename}")
