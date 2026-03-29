@@ -130,12 +130,34 @@ def _probe_video_meta(path: str) -> dict:
         return {}
 
 
+# MP4 container-level identifiers — part of the spec, cannot be removed
+_CONTAINER_FIELDS = {"major_brand", "minor_version", "compatible_brands"}
+
+# Codec/muxer-added stream tags — set by libx264/libfdk_aac/MP4 muxer itself,
+# not user-supplied metadata. Facebook does not use these for creative tracking.
+_STREAM_FIELDS_SKIP = {
+    "vendor_id",      # [0][0][0][0] — added by AAC codec
+    "handler_name",   # VideoHandler/SoundHandler — added by MP4 muxer
+    "language",       # "und" — added automatically by muxer
+    "encoder",        # "Lavc libx264" — codec identifier, not user metadata
+}
+
+
 def _count_video_meta_tags(probe: dict) -> int:
+    """Count meaningful metadata tags, excluding non-removable MP4 container fields."""
     count = 0
     fmt_tags = probe.get("format", {}).get("tags", {})
-    count += len(fmt_tags)
+    for key, val in fmt_tags.items():
+        if key.lower() in _CONTAINER_FIELDS:
+            continue
+        if val and val.strip():
+            count += 1
     for stream in probe.get("streams", []):
-        count += len(stream.get("tags", {}))
+        for key, val in stream.get("tags", {}).items():
+            if key.lower() in _STREAM_FIELDS_SKIP:
+                continue
+            if val and val.strip():
+                count += 1
     return count
 
 
