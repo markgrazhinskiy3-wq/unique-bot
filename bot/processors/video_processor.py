@@ -115,14 +115,12 @@ def build_video_filter(info: dict) -> str:
     w = info["width"]
     h = info["height"]
 
-    # Percentage-based crop (2–4% per side) so pHash changes significantly
-    # even on large resolutions like 1080x1920.
-    pct_w = random.uniform(0.02, 0.04)
-    pct_h = random.uniform(0.02, 0.04)
-    crop_left   = int(w * pct_w)
-    crop_right  = int(w * random.uniform(0.02, 0.04))
-    crop_top    = int(h * pct_h)
-    crop_bottom = int(h * random.uniform(0.02, 0.04))
+    # Percentage-based crop (3–5% per side) for meaningful pHash change
+    # on any resolution (e.g. 1080x1920 → ~32–54px each side).
+    crop_left   = int(w * random.uniform(0.03, 0.05))
+    crop_right  = int(w * random.uniform(0.03, 0.05))
+    crop_top    = int(h * random.uniform(0.03, 0.05))
+    crop_bottom = int(h * random.uniform(0.03, 0.05))
 
     # Keep values even (required by libx264)
     crop_left   = max(crop_left, 2)
@@ -147,8 +145,8 @@ def build_video_filter(info: dict) -> str:
     if out_h % 2 != 0:
         out_h += 1
 
-    # Micro-rotation (0.3–0.6°): changes interpolated pixel values
-    angle_deg = round(random.uniform(0.3, 0.6) * random.choice([-1, 1]), 3)
+    # Rotation 0.5–1.0° — more interpolation = more pHash change
+    angle_deg = round(random.uniform(0.5, 1.0) * random.choice([-1, 1]), 3)
     angle_rad = round(angle_deg * 3.14159265 / 180, 6)
 
     noise_strength = random.randint(3, 5)
@@ -159,6 +157,15 @@ def build_video_filter(info: dict) -> str:
     hue_h      = round(random.uniform(-1.0, 1.0), 3)
     hue_s      = round(random.uniform(0.995, 1.005), 4)
 
+    # Subtle color channel shift: R+2, G-1, B+1 (colorbalance range is -1..1)
+    cb_rs = round(random.uniform(0.015, 0.025), 3)
+    cb_gs = round(random.uniform(-0.015, -0.005), 3)
+    cb_bs = round(random.uniform(0.005, 0.015), 3)
+
+    # Vignette angle and mid-point (keeps center bright, dims edges slightly)
+    vignette_angle = round(random.uniform(0.5, 0.55), 3)   # ~PI/6 ≈ 0.524
+    vignette_mid   = round(random.uniform(0.25, 0.35), 3)  # ~0.3
+
     filters = [
         f"crop={cropped_w}:{cropped_h}:{crop_left}:{crop_top}",
         f"scale={out_w}:{out_h}:flags=lanczos",
@@ -166,11 +173,14 @@ def build_video_filter(info: dict) -> str:
         f"noise=c0s={noise_strength}:c0f=t",
         f"eq=brightness={brightness}:contrast={contrast}:saturation={saturation}:gamma={gamma}",
         f"hue=h={hue_h}:s={hue_s}",
+        f"colorbalance=rs={cb_rs}:gs={cb_gs}:bs={cb_bs}",
+        f"vignette={vignette_angle}:{vignette_mid}",
     ]
 
     logger.info(
         f"Video filter: crop=({crop_left},{crop_top},{crop_right},{crop_bottom}) "
-        f"scale={out_w}x{out_h} rotate={angle_deg}° noise={noise_strength}"
+        f"scale={out_w}x{out_h} rotate={angle_deg}° noise={noise_strength} "
+        f"colorbalance=rs={cb_rs}:gs={cb_gs}:bs={cb_bs} vignette={vignette_angle}"
     )
     return ",".join(filters)
 
