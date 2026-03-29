@@ -17,6 +17,7 @@ from telegram.ext import (
 from processors.image_processor import process_image
 from processors.video_processor import process_video_file
 from utils.helpers import is_image, is_video
+from utils.verification import verify_image, verify_video
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -99,9 +100,12 @@ async def process_image_message(
             result_bytes, out_filename = await loop.run_in_executor(
                 None, process_image, image_bytes, filename
             )
-            return result_bytes, out_filename
+            caption = await loop.run_in_executor(
+                None, verify_image, image_bytes, result_bytes
+            )
+            return result_bytes, out_filename, caption
 
-        result_bytes, out_filename = await asyncio.wait_for(
+        result_bytes, out_filename, caption = await asyncio.wait_for(
             do_process(), timeout=PROCESSING_TIMEOUT
         )
 
@@ -109,7 +113,7 @@ async def process_image_message(
         await update.message.reply_document(
             document=io.BytesIO(result_bytes),
             filename=out_filename,
-            caption="✅ Готово! Фото уникализировано.",
+            caption=caption,
         )
     except asyncio.TimeoutError:
         await status_msg.edit_text(MSG_TIMEOUT)
@@ -136,9 +140,12 @@ async def process_video_message(
             result_bytes, out_filename = await loop.run_in_executor(
                 None, process_video_file, video_bytes, filename
             )
-            return result_bytes, out_filename
+            caption = await loop.run_in_executor(
+                None, verify_video, video_bytes, result_bytes
+            )
+            return result_bytes, out_filename, caption
 
-        result_bytes, out_filename = await asyncio.wait_for(
+        result_bytes, out_filename, caption = await asyncio.wait_for(
             do_process(), timeout=PROCESSING_TIMEOUT
         )
 
@@ -146,7 +153,7 @@ async def process_video_message(
         await update.message.reply_document(
             document=io.BytesIO(result_bytes),
             filename=out_filename,
-            caption="✅ Готово! Видео уникализировано.",
+            caption=caption,
         )
     except asyncio.TimeoutError:
         await status_msg.edit_text(MSG_TIMEOUT)

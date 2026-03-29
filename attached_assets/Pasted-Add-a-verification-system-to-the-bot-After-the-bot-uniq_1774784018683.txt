@@ -1,0 +1,69 @@
+Add a verification system to the bot. After the bot uniqualizes a file and before sending it back to the user, the bot should automatically run all checks and include the results in the message.
+
+For PHOTOS, after processing compute and include in the reply message:
+
+1. MD5 hash of original file
+2. MD5 hash of processed file
+3. Whether they are different
+4. Perceptual hash (pHash) of original image using this method: resize to 32x32, convert to grayscale, compute DCT, take top-left 8x8, generate 64-bit hash from median comparison
+5. Perceptual hash of processed image using same method
+6. Hamming distance between the two pHashes
+7. Number of EXIF tags in original
+8. Number of EXIF tags in processed (should be 0)
+9. File size of both files
+
+Format the reply message like this:
+
+"✅ Готово! Файл уникализирован.
+
+📊 Результаты проверки:
+
+🔹 MD5 оригинала: {hash1}
+🔹 MD5 результата: {hash2}
+🔹 Хеши совпадают: НЕТ ✅
+
+🔹 pHash оригинала: {phash1}
+🔹 pHash результата: {phash2}
+🔹 Разница pHash: {distance} бит из 64
+🔹 Уникальность: {ВЫСОКАЯ if distance >= 8 else НИЗКАЯ} {✅ if distance >= 8 else ⚠️}
+
+🔹 Метаданные оригинала: {n} тегов
+🔹 Метаданные результата: 0 тегов ✅
+
+🔹 Размер оригинала: {size1} KB
+🔹 Размер результата: {size2} KB
+
+Facebook увидит это как новый креатив 🔥"
+
+For VIDEOS, compute and include:
+
+1. MD5 hash of both files and whether different
+2. Number of metadata tags in original vs processed
+3. File size comparison
+4. Extract first frame from both videos, compute pHash of first frames, show hamming distance
+5. FPS of original vs processed
+6. Resolution of original vs processed
+
+Format video reply:
+
+"✅ Готово! Видео уникализировано.
+
+📊 Результаты проверки:
+
+🔹 MD5 оригинала: {hash1}
+🔹 MD5 результата: {hash2}
+🔹 Хеши совпадают: НЕТ ✅
+
+🔹 pHash первого кадра оригинала: {phash1}
+🔹 pHash первого кадра результата: {phash2}
+🔹 Разница pHash: {distance} бит из 64
+🔹 Уникальность: {ВЫСОКАЯ/НИЗКАЯ} {✅/⚠️}
+
+🔹 Метаданные: очищены ✅
+🔹 FPS: {orig_fps} → {new_fps}
+🔹 Разрешение: {orig_res} → {new_res}
+🔹 Размер: {size1} KB → {size2} KB
+
+Facebook увидит это как новый креатив 🔥"
+
+Use scipy.fftpack for DCT computation in pHash. Add scipy to requirements.txt. If scipy is not available, use a simple average hash (aHash) as fallback.
