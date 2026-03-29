@@ -215,22 +215,73 @@ def step6_gaussian_noise(img: Image.Image) -> Image.Image:
     return img
 
 
+def _save_jpeg(img: Image.Image, quality: int) -> bytes:
+    buf = io.BytesIO()
+    img_save = img.convert("RGB") if img.mode == "RGBA" else img
+    img_save.save(buf, format="JPEG", quality=quality, subsampling=0)
+    return buf.getvalue()
+
+
+def _find_jpeg_quality_for_size(img: Image.Image, target_bytes: int) -> int:
+    lo, hi = 5, 95
+    best_quality = 85
+    best_diff = float("inf")
+
+    for _ in range(10):
+        mid = (lo + hi) // 2
+        data = _save_jpeg(img, mid)
+        size = len(data)
+        diff = abs(size - target_bytes)
+        if diff < best_diff:
+            best_diff = diff
+            best_quality = mid
+        if size < target_bytes:
+            lo = mid + 1
+        elif size > target_bytes:
+            hi = mid - 1
+        else:
+            break
+        if lo > hi:
+            break
+
+    return best_quality
+
+
+def _save_png(img: Image.Image, compress_level: int) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", compress_level=compress_level, optimize=False)
+    return buf.getvalue()
+
+
+def _find_png_compress_for_size(img: Image.Image, target_bytes: int) -> int:
+    best_level = 6
+    best_diff = float("inf")
+    for level in range(0, 10):
+        data = _save_png(img, level)
+        diff = abs(len(data) - target_bytes)
+        if diff < best_diff:
+            best_diff = diff
+            best_level = level
+    return best_level
+
+
 def step7_reencode(img: Image.Image, fmt: str) -> Image.Image:
     if fmt != "JPEG":
         return img
 
-    buf = io.BytesIO()
     img_save = img.convert("RGB") if img.mode == "RGBA" else img
-    quality = random.randint(90, 96)
-    img_save.save(buf, format="JPEG", quality=quality, subsampling=0)
-    buf.seek(0)
+    quality = random.randint(82, 88)
+    data = _save_jpeg(img_save, quality)
+    buf = io.BytesIO(data)
     result = Image.open(buf).copy()
-    logger.info(f"[reencode] quality={quality}")
+    logger.info(f"[reencode] quality={quality} size={len(data)/1024:.1f}KB")
     _sample_pixels(result, "after_reencode")
     return result
 
 
 def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, str]:
+    original_file_size = len(image_bytes)
+
     buf = io.BytesIO(image_bytes)
     img = Image.open(buf)
     original_format = img.format
@@ -241,7 +292,10 @@ def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, st
 
     fmt = _detect_format(img, original_format)
 
-    logger.info(f"Processing image: {original_filename}, format={fmt}, size={original_size}, mode={img.mode}")
+    logger.info(
+        f"Processing image: {original_filename}, format={fmt}, "
+        f"size={original_size}, mode={img.mode}, file_size={original_file_size/1024:.1f}KB"
+    )
     _sample_pixels(img, "original")
 
     img = step1_destroy_metadata(img)
@@ -252,24 +306,32 @@ def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, st
     img = step6_gaussian_noise(img)
     img = step7_reencode(img, fmt)
 
-    out_buf = io.BytesIO()
     img_out = img
     if fmt == "JPEG" and img.mode == "RGBA":
         img_out = img.convert("RGB")
 
-    save_kwargs: dict = {"format": fmt}
     if fmt == "JPEG":
-        save_kwargs["quality"] = random.randint(92, 95)
-        save_kwargs["subsampling"] = 0
+        quality = _find_jpeg_quality_for_size(img_out, original_file_size)
+        jitter = random.randint(-2, 2)
+        quality = max(40, min(95, quality + jitter))
+        out_data = _save_jpeg(img_out, quality)
     elif fmt == "PNG":
-        save_kwargs["optimize"] = True
+        compress_level = _find_png_compress_for_size(img_out, original_file_size)
+        out_data = _save_png(img_out, compress_level)
+    else:
+        out_buf = io.BytesIO()
+        img_out.save(out_buf, format=fmt)
+        out_data = out_buf.getvalue()
 
-    img_out.save(out_buf, **save_kwargs)
-    out_buf.seek(0)
+    ratio = len(out_data) / original_file_size
+    logger.info(
+        f"Image processing complete: {original_filename}, "
+        f"orig={original_file_size/1024:.1f}KB out={len(out_data)/1024:.1f}KB "
+        f"ratio={ratio:.2f} quality={quality if fmt == 'JPEG' else 'N/A'}"
+    )
 
     ext_map = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
     out_ext = ext_map.get(fmt, ".jpg")
     out_filename = f"unique_{original_filename.rsplit('.', 1)[0]}{out_ext}"
 
-    logger.info(f"Image processing complete: {out_filename}, final_size={img_out.size}")
-    return out_buf.read(), out_filename
+    return out_data, out_filename
