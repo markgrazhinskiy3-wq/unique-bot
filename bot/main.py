@@ -5,6 +5,8 @@ import logging
 import traceback
 from pathlib import Path
 
+import httpx
+
 from telegram import Update, Document, PhotoSize
 from telegram.ext import (
     Application,
@@ -53,6 +55,35 @@ MSG_TOO_LARGE = (
     "⚠️ Файл слишком большой (лимит 2 ГБ).\n"
     "Отправьте файл меньшего размера."
 )
+
+
+async def _download_file(file_id: str, token: str) -> bytes:
+    """Download a file from the local bot API server, fixing the double-slash URL bug.
+
+    PTB constructs: base_file_url + token + "/" + file_path
+    Local server returns file_path with a leading "/" (e.g. "/{token}/documents/file.png")
+    This causes a double slash: .../bot{token}//{token}/documents/file.png → 404
+
+    Fix: strip the leading slash and build the URL manually.
+    """
+    async with httpx.AsyncClient(timeout=300) as client:
+        # Step 1: get file_path from local API
+        resp = await client.post(
+            f"{LOCAL_API_URL}/bot{token}/getFile",
+            json={"file_id": file_id},
+        )
+        resp.raise_for_status()
+        file_path = resp.json()["result"]["file_path"]
+
+        # Step 2: strip leading slash to avoid double-slash in URL
+        file_path = file_path.lstrip("/")
+
+        # Step 3: download from correct URL
+        download_url = f"{LOCAL_API_URL}/file/bot{token}/{file_path}"
+        logger.info(f"Downloading file from: {download_url}")
+        file_resp = await client.get(download_url)
+        file_resp.raise_for_status()
+        return file_resp.content
 
 
 def _error_msg(label: str, e: Exception) -> str:
@@ -127,10 +158,7 @@ async def process_image_message(
     status_msg = await update.message.reply_text(MSG_PROCESSING)
     try:
         async def do_process():
-            tg_file = await context.bot.get_file(file_id)
-            buf = io.BytesIO()
-            await tg_file.download_to_memory(buf)
-            image_bytes = buf.getvalue()
+            image_bytes = await _download_file(file_id, context.bot.token)
 
             loop = asyncio.get_event_loop()
             result_bytes, out_filename = await loop.run_in_executor(
@@ -168,14 +196,7 @@ async def process_video_message(
     status_msg = await update.message.reply_text(MSG_PROCESSING)
     try:
         async def do_process():
-            tg_file = await context.bot.get_file(file_id)
-            file_size = tg_file.file_size
-            if file_size and file_size > TELEGRAM_FILE_SIZE_LIMIT:
-                raise ValueError(MSG_TOO_LARGE)
-
-            buf = io.BytesIO()
-            await tg_file.download_to_memory(buf)
-            video_bytes = buf.getvalue()
+            video_bytes = await _download_file(file_id, context.bot.token)
 
             logger.info(
                 f"Downloaded video: {filename} "
