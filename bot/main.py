@@ -28,7 +28,11 @@ logger = logging.getLogger(__name__)
 SUPPORTED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 SUPPORTED_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
-TELEGRAM_FILE_SIZE_LIMIT = 20 * 1024 * 1024  # 20 MB
+# Local Bot API server removes the 20 MB limit — allow up to 2 GB
+TELEGRAM_FILE_SIZE_LIMIT = 2000 * 1024 * 1024  # 2 GB
+
+# Local Telegram Bot API server URL (set to use your own server, removes 20 MB limit)
+LOCAL_API_URL = os.environ.get("LOCAL_BOT_API_URL", "http://95.163.152.163:8081")
 
 DEBUG_ERRORS = os.environ.get("DEBUG_ERRORS", "true").lower() == "true"
 PROCESSING_TIMEOUT = 300
@@ -39,15 +43,15 @@ MSG_START = (
     "📸 Фото — отправляй как файл (документ) для лучшего качества.\n"
     "🎬 Видео — отправляй как файл (документ).\n\n"
     "Можно отправлять и обычным способом (сжатым), но качество будет хуже.\n\n"
-    "⚠️ Максимальный размер файла: 20MB."
+    "⚠️ Максимальный размер файла: 2 ГБ."
 )
 MSG_PROCESSING = "⏳ Обрабатываю файл, подожди немного..."
 MSG_WRONG_FORMAT = "⚠️ Неподдерживаемый формат. Отправьте фото или видео."
 MSG_PROCESSING_ERROR = "❌ Ошибка обработки. Попробуйте ещё раз."
 MSG_TIMEOUT = "⏱ Слишком долгая обработка. Попробуйте файл поменьше."
 MSG_TOO_LARGE = (
-    "⚠️ Файл слишком большой для загрузки через Telegram Bot API (лимит 20MB).\n"
-    "Отправьте файл меньшего размера или сжатое видео."
+    "⚠️ Файл слишком большой (лимит 2 ГБ).\n"
+    "Отправьте файл меньшего размера."
 )
 
 
@@ -216,7 +220,13 @@ def main() -> None:
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable is not set")
 
-    app = Application.builder().token(token).build()
+    app = (
+        Application.builder()
+        .token(token)
+        .base_url(f"{LOCAL_API_URL}/bot")
+        .base_file_url(f"{LOCAL_API_URL}/file/bot")
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
