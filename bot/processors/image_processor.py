@@ -16,142 +16,218 @@ def _detect_format(img: Image.Image, original_format: str | None) -> str:
     return fmt
 
 
+def _sample_pixels(img: Image.Image, label: str) -> None:
+    arr = np.array(img.convert("RGB"))
+    h, w = arr.shape[:2]
+    sample = arr[h // 2, w // 2]
+    logger.debug(f"[{label}] size={img.size} center_pixel={sample.tolist()}")
+
+
 def step1_destroy_metadata(img: Image.Image) -> Image.Image:
     data = list(img.getdata())
     mode = img.mode
     size = img.size
     clean = Image.new(mode, size)
     clean.putdata(data)
+    _sample_pixels(clean, "after_meta_strip")
     return clean
 
 
-def step2_pixel_grid_shift(img: Image.Image) -> Image.Image:
-    w, h = img.size
-    border = 2
-    img_with_border = Image.new(img.mode, (w + border * 2, h + border * 2))
+def step2_pad_and_asymmetric_crop(img: Image.Image) -> Image.Image:
+    _sample_pixels(img, "before_pad_crop")
 
-    if img.mode in ("RGB", "RGBA"):
-        arr = np.array(img)
-        top_row = arr[0:1, :, :]
-        bottom_row = arr[-1:, :, :]
-        left_col = arr[:, 0:1, :]
-        right_col = arr[:, -1:, :]
+    arr = np.array(img.convert("RGB") if img.mode not in ("RGB", "RGBA") else img)
+    padded = np.pad(arr, ((4, 4), (4, 4), (0, 0)), mode="edge")
+    padded_img = Image.fromarray(padded.astype(np.uint8), mode="RGB" if arr.ndim == 3 else img.mode)
 
-        top_pad = np.tile(top_row, (border, 1, 1))
-        bottom_pad = np.tile(bottom_row, (border, 1, 1))
-        left_pad = np.tile(left_col, (1, border, 1))
-        right_pad = np.tile(right_col, (1, border, 1))
+    if img.mode == "RGBA":
+        alpha = np.array(img.split()[3])
+        alpha_pad = np.pad(alpha, ((4, 4), (4, 4)), mode="edge")
+        r, g, b = padded_img.split()
+        padded_img = Image.merge("RGBA", (r, g, b, Image.fromarray(alpha_pad, "L")))
 
-        padded = np.pad(arr, ((border, border), (border, border), (0, 0)), mode='edge')
-        img_with_border = Image.fromarray(padded.astype(np.uint8), mode=img.mode)
-    else:
-        img_rgb = img.convert("RGB")
-        arr = np.array(img_rgb)
-        padded = np.pad(arr, ((border, border), (border, border), (0, 0)), mode='edge')
-        img_with_border = Image.fromarray(padded.astype(np.uint8), mode="RGB")
-        if img.mode != "RGB":
-            img_with_border = img_with_border.convert(img.mode)
+    pw, ph = padded_img.size
 
-    crop_top = random.randint(1, 3)
-    crop_bottom = random.randint(1, 3)
-    crop_left = random.randint(1, 3)
-    crop_right = random.randint(1, 3)
+    crop_left = random.randint(2, 5)
+    crop_right = random.randint(2, 5)
+    crop_top = random.randint(2, 5)
+    crop_bottom = random.randint(2, 5)
 
-    bw, bh = img_with_border.size
-    img_cropped = img_with_border.crop((
-        crop_left, crop_top,
-        bw - crop_right, bh - crop_bottom
+    cropped = padded_img.crop((
+        crop_left,
+        crop_top,
+        pw - crop_right,
+        ph - crop_bottom,
     ))
 
-    delta_w = random.randint(-2, 2)
-    delta_h = random.randint(-2, 2)
-    new_w = max(w + delta_w, 2)
-    new_h = max(h + delta_h, 2)
-    img_resized = img_cropped.resize((new_w, new_h), Image.LANCZOS)
+    orig_w, orig_h = img.size
+    delta_w = random.randint(2, 4)
+    delta_h = random.randint(2, 4)
+    sign_w = random.choice([-1, 1])
+    sign_h = random.choice([-1, 1])
+    new_w = max(orig_w + sign_w * delta_w, 4)
+    new_h = max(orig_h + sign_h * delta_h, 4)
+    if new_w % 2 != 0:
+        new_w += 1
+    if new_h % 2 != 0:
+        new_h += 1
 
-    return img_resized
+    result = cropped.resize((new_w, new_h), Image.LANCZOS)
+
+    logger.info(f"[pad_crop] orig={img.size} crop=({crop_left},{crop_top},{crop_right},{crop_bottom}) new={result.size}")
+    _sample_pixels(result, "after_pad_crop")
+    return result
 
 
-def step3_subpixel_noise(img: Image.Image) -> Image.Image:
+def step3_rotation(img: Image.Image) -> Image.Image:
+    _sample_pixels(img, "before_rotation")
+
+    angle = random.uniform(0.4, 0.8) * random.choice([-1, 1])
+    w, h = img.size
+
+    if img.mode == "RGBA":
+        rotated = img.rotate(angle, expand=True, resample=Image.BICUBIC, fillcolor=(0, 0, 0, 0))
+    else:
+        bg = (255, 255, 255) if img.mode == "RGB" else 255
+        rotated = img.rotate(angle, expand=True, resample=Image.BICUBIC, fillcolor=bg)
+
+    rw, rh = rotated.size
+    border_w = (rw - w) // 2 + 1
+    border_h = (rh - h) // 2 + 1
+    border_w = max(border_w, 0)
+    border_h = max(border_h, 0)
+
+    result = rotated.crop((
+        border_w,
+        border_h,
+        rw - border_w,
+        rh - border_h,
+    ))
+    result = result.resize((w, h), Image.LANCZOS)
+
+    logger.info(f"[rotation] angle={angle:.3f}° orig={img.size} result={result.size}")
+    _sample_pixels(result, "after_rotation")
+    return result
+
+
+def step4_zoom_crop(img: Image.Image) -> Image.Image:
+    _sample_pixels(img, "before_zoom")
+
+    w, h = img.size
+    pct = random.uniform(0.02, 0.04)
+    left = int(w * pct)
+    top = int(h * pct)
+    right = w - int(w * pct)
+    bottom = h - int(h * pct)
+
+    left = max(left, 1)
+    top = max(top, 1)
+    right = min(right, w - 1)
+    bottom = min(bottom, h - 1)
+
+    cropped = img.crop((left, top, right, bottom))
+    result = cropped.resize((w, h), Image.LANCZOS)
+
+    logger.info(f"[zoom] pct={pct:.3f} crop=({left},{top},{right},{bottom}) result={result.size}")
+    _sample_pixels(result, "after_zoom")
+    return result
+
+
+def step5_color_shifts(img: Image.Image) -> Image.Image:
+    _sample_pixels(img, "before_color_shifts")
+
     if img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGB")
 
-    arr = np.array(img, dtype=np.float32)
-    noise = np.random.uniform(-1.5, 1.5, arr.shape).astype(np.float32)
-    arr = arr + noise
-    arr = np.clip(arr, 0, 255).astype(np.uint8)
-    return Image.fromarray(arr, mode=img.mode)
+    b_factor = 1.0 + random.uniform(-3, 3) / 255.0
+    c_factor = random.uniform(0.97, 1.03)
+    s_factor = random.uniform(0.97, 1.03)
+
+    img = ImageEnhance.Brightness(img).enhance(b_factor)
+    img = ImageEnhance.Contrast(img).enhance(c_factor)
+
+    has_alpha = img.mode == "RGBA"
+    if has_alpha:
+        r, g, b, a = img.split()
+        rgb = Image.merge("RGB", (r, g, b))
+        rgb = ImageEnhance.Color(rgb).enhance(s_factor)
+        r2, g2, b2 = rgb.split()
+        img = Image.merge("RGBA", (r2, g2, b2, a))
+    else:
+        img = ImageEnhance.Color(img).enhance(s_factor)
+
+    hue_shift = random.uniform(-2, 2)
+    try:
+        img_hsv = img.convert("RGB") if img.mode == "RGBA" else img
+        arr = np.array(img_hsv, dtype=np.float32) / 255.0
+        hue_rad = hue_shift * np.pi / 180.0
+        cos_h = np.cos(hue_rad)
+        sin_h = np.sin(hue_rad)
+        m = np.array([
+            [cos_h + (1 - cos_h) / 3, (1 - cos_h) / 3 - np.sqrt(1/3) * sin_h, (1 - cos_h) / 3 + np.sqrt(1/3) * sin_h],
+            [(1 - cos_h) / 3 + np.sqrt(1/3) * sin_h, cos_h + (1 - cos_h) / 3, (1 - cos_h) / 3 - np.sqrt(1/3) * sin_h],
+            [(1 - cos_h) / 3 - np.sqrt(1/3) * sin_h, (1 - cos_h) / 3 + np.sqrt(1/3) * sin_h, cos_h + (1 - cos_h) / 3],
+        ])
+        arr = arr @ m.T
+        arr = np.clip(arr, 0, 1)
+        hue_shifted = Image.fromarray((arr * 255).astype(np.uint8), mode="RGB")
+        if has_alpha:
+            _, _, _, a = img.split()
+            r, g, b = hue_shifted.split()
+            img = Image.merge("RGBA", (r, g, b, a))
+        else:
+            img = hue_shifted
+    except Exception as e:
+        logger.warning(f"Hue shift failed: {e}")
+
+    logger.info(f"[color_shifts] brightness_delta={b_factor:.4f} contrast={c_factor:.4f} sat={s_factor:.4f} hue={hue_shift:.2f}°")
+    _sample_pixels(img, "after_color_shifts")
+    return img
 
 
-def step4_color_space_micro_shift(img: Image.Image) -> Image.Image:
+def step6_gaussian_noise(img: Image.Image) -> Image.Image:
+    _sample_pixels(img, "before_noise")
+
     if img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGB")
 
     has_alpha = img.mode == "RGBA"
     if has_alpha:
         r, g, b, a = img.split()
+        rgb = Image.merge("RGB", (r, g, b))
     else:
-        r, g, b = img.split()
+        rgb = img
 
-    def shift_channel(ch):
-        arr = np.array(ch, dtype=np.float32)
-        delta = random.uniform(-1.0, 1.0)
-        arr = arr + delta
-        arr = np.clip(arr, 0, 255).astype(np.uint8)
-        return Image.fromarray(arr, mode="L")
-
-    r = shift_channel(r)
-    g = shift_channel(g)
-    b = shift_channel(b)
+    arr = np.array(rgb, dtype=np.float32)
+    sigma = random.uniform(3.0, 6.0)
+    noise = np.random.normal(0, sigma, arr.shape).astype(np.float32)
+    arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
+    rgb_out = Image.fromarray(arr, mode="RGB")
 
     if has_alpha:
-        return Image.merge("RGBA", (r, g, b, a))
-    return Image.merge("RGB", (r, g, b))
-
-
-def step5_jpeg_ghost(img: Image.Image, fmt: str) -> Image.Image:
-    if fmt == "JPEG":
-        buf = io.BytesIO()
-        quality = random.randint(92, 97)
-        img_save = img
-        if img.mode == "RGBA":
-            img_save = img.convert("RGB")
-        img_save.save(buf, format="JPEG", quality=quality, subsampling=0)
-        buf.seek(0)
-        return Image.open(buf).copy()
-    return img
-
-
-def step6_micro_rotation(img: Image.Image) -> Image.Image:
-    angle = random.uniform(-0.3, 0.3)
-    if img.mode == "RGBA":
-        rotated = img.rotate(angle, expand=False, resample=Image.BICUBIC, fillcolor=(0, 0, 0, 0))
+        r2, g2, b2 = rgb_out.split()
+        img = Image.merge("RGBA", (r2, g2, b2, a))
     else:
-        bg_color = (255, 255, 255) if img.mode == "RGB" else 255
-        rotated = img.rotate(angle, expand=False, resample=Image.BICUBIC, fillcolor=bg_color)
-    return rotated
+        img = rgb_out
 
-
-def step7_sharpness_micro_adjust(img: Image.Image) -> Image.Image:
-    factor = random.uniform(0.97, 1.03)
-    enhancer = ImageEnhance.Sharpness(img)
-    return enhancer.enhance(factor)
-
-
-def step8_brightness_contrast(img: Image.Image) -> Image.Image:
-    b_factor = random.uniform(0.997, 1.003)
-    c_factor = random.uniform(0.997, 1.003)
-    img = ImageEnhance.Brightness(img).enhance(b_factor)
-    img = ImageEnhance.Contrast(img).enhance(c_factor)
+    logger.info(f"[noise] sigma={sigma:.2f}")
+    _sample_pixels(img, "after_noise")
     return img
 
 
-def step9_final_scale(img: Image.Image, original_size: tuple[int, int]) -> Image.Image:
-    target_w = original_size[0] + random.randint(-1, 1)
-    target_h = original_size[1] + random.randint(-1, 1)
-    target_w = max(target_w, 2)
-    target_h = max(target_h, 2)
-    return img.resize((target_w, target_h), Image.LANCZOS)
+def step7_reencode(img: Image.Image, fmt: str) -> Image.Image:
+    if fmt != "JPEG":
+        return img
+
+    buf = io.BytesIO()
+    img_save = img.convert("RGB") if img.mode == "RGBA" else img
+    quality = random.randint(90, 96)
+    img_save.save(buf, format="JPEG", quality=quality, subsampling=0)
+    buf.seek(0)
+    result = Image.open(buf).copy()
+    logger.info(f"[reencode] quality={quality}")
+    _sample_pixels(result, "after_reencode")
+    return result
 
 
 def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, str]:
@@ -166,16 +242,15 @@ def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, st
     fmt = _detect_format(img, original_format)
 
     logger.info(f"Processing image: {original_filename}, format={fmt}, size={original_size}, mode={img.mode}")
+    _sample_pixels(img, "original")
 
     img = step1_destroy_metadata(img)
-    img = step2_pixel_grid_shift(img)
-    img = step3_subpixel_noise(img)
-    img = step4_color_space_micro_shift(img)
-    img = step5_jpeg_ghost(img, fmt)
-    img = step6_micro_rotation(img)
-    img = step7_sharpness_micro_adjust(img)
-    img = step8_brightness_contrast(img)
-    img = step9_final_scale(img, original_size)
+    img = step2_pad_and_asymmetric_crop(img)
+    img = step3_rotation(img)
+    img = step4_zoom_crop(img)
+    img = step5_color_shifts(img)
+    img = step6_gaussian_noise(img)
+    img = step7_reencode(img, fmt)
 
     out_buf = io.BytesIO()
     img_out = img
@@ -184,7 +259,7 @@ def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, st
 
     save_kwargs: dict = {"format": fmt}
     if fmt == "JPEG":
-        save_kwargs["quality"] = random.randint(93, 96)
+        save_kwargs["quality"] = random.randint(92, 95)
         save_kwargs["subsampling"] = 0
     elif fmt == "PNG":
         save_kwargs["optimize"] = True
@@ -196,5 +271,5 @@ def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, st
     out_ext = ext_map.get(fmt, ".jpg")
     out_filename = f"unique_{original_filename.rsplit('.', 1)[0]}{out_ext}"
 
-    logger.info(f"Image processed successfully: {out_filename}")
+    logger.info(f"Image processing complete: {out_filename}, final_size={img_out.size}")
     return out_buf.read(), out_filename
