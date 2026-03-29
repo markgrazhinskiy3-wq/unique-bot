@@ -4,6 +4,19 @@
 
 pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
 
+Contains a Telegram bot for media uniqualization (see `bot/` directory).
+
+## Telegram Bot (bot/)
+
+Python 3.11 bot for uniqualizing photos and videos for Facebook ads.
+
+- **Entry**: `bot/main.py` — Telegram polling bot
+- **Image processor**: `bot/processors/image_processor.py` — 9-step photo transformation
+- **Video processor**: `bot/processors/video_processor.py` — FFmpeg-based video transformation
+- **Run**: Workflow "Telegram Bot" (`cd bot && python main.py`)
+- **Env**: `TELEGRAM_BOT_TOKEN` (in Replit Secrets)
+- **Supported formats**: JPG, PNG, WEBP (photos); MP4, MOV, AVI, MKV, WEBM (videos)
+
 ## Stack
 
 - **Monorepo tool**: pnpm workspaces
