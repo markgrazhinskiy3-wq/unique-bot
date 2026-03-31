@@ -5,6 +5,8 @@ import logging
 import traceback
 from pathlib import Path
 
+import httpx
+
 from telegram import Update, Document, PhotoSize
 from telegram.ext import (
     Application,
@@ -28,8 +30,13 @@ logger = logging.getLogger(__name__)
 SUPPORTED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 SUPPORTED_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
-# Standard Telegram Bot API limits: receive up to 20 MB, send up to 50 MB
-TELEGRAM_FILE_SIZE_LIMIT = 20 * 1024 * 1024  # 20 MB
+# If LOCAL_BOT_API_URL is set — use local server (up to 2 GB).
+# Otherwise — use standard Telegram API (up to 20 MB).
+LOCAL_API_URL = os.environ.get("LOCAL_BOT_API_URL", "").rstrip("/")
+USE_LOCAL_API = bool(LOCAL_API_URL)
+
+TELEGRAM_FILE_SIZE_LIMIT = 2000 * 1024 * 1024 if USE_LOCAL_API else 20 * 1024 * 1024
+SIZE_LIMIT_LABEL = "2 ГБ" if USE_LOCAL_API else "20 МБ"
 
 DEBUG_ERRORS = os.environ.get("DEBUG_ERRORS", "true").lower() == "true"
 PROCESSING_TIMEOUT = 300
@@ -40,14 +47,14 @@ MSG_START = (
     "📸 Фото — отправляй как файл (документ) для лучшего качества.\n"
     "🎬 Видео — отправляй как файл (документ).\n\n"
     "Можно отправлять и обычным способом (сжатым), но качество будет хуже.\n\n"
-    "⚠️ Максимальный размер файла: 20 МБ."
+    f"⚠️ Максимальный размер файла: {SIZE_LIMIT_LABEL}."
 )
 MSG_PROCESSING = "⏳ Обрабатываю файл, подожди немного..."
 MSG_WRONG_FORMAT = "⚠️ Неподдерживаемый формат. Отправьте фото или видео."
 MSG_PROCESSING_ERROR = "❌ Ошибка обработки. Попробуйте ещё раз."
 MSG_TIMEOUT = "⏱ Слишком долгая обработка. Попробуйте файл поменьше."
 MSG_TOO_LARGE = (
-    "⚠️ Файл слишком большой (лимит 20 МБ).\n"
+    f"⚠️ Файл слишком большой (лимит {SIZE_LIMIT_LABEL}).\n"
     "Отправьте файл меньшего размера."
 )
 
@@ -65,11 +72,27 @@ def _check_file_size(file_size: int | None) -> bool:
     return file_size <= TELEGRAM_FILE_SIZE_LIMIT
 
 
-async def _download_file(file_id: str, context: ContextTypes.DEFAULT_TYPE) -> bytes:
-    tg_file = await context.bot.get_file(file_id)
-    buf = io.BytesIO()
-    await tg_file.download_to_memory(buf)
-    return buf.getvalue()
+async def _download_file(file_id: str, token: str, context: ContextTypes.DEFAULT_TYPE) -> bytes:
+    if USE_LOCAL_API:
+        # Local API returns file_path with leading slash — fix the double-slash bug
+        async with httpx.AsyncClient(timeout=300) as client:
+            resp = await client.post(
+                f"{LOCAL_API_URL}/bot{token}/getFile",
+                json={"file_id": file_id},
+            )
+            resp.raise_for_status()
+            file_path = resp.json()["result"]["file_path"].lstrip("/")
+            download_url = f"{LOCAL_API_URL}/file/bot{token}/{file_path}"
+            logger.info(f"Downloading via local API: {download_url}")
+            file_resp = await client.get(download_url)
+            file_resp.raise_for_status()
+            return file_resp.content
+    else:
+        # Standard Telegram API (up to 20 MB)
+        tg_file = await context.bot.get_file(file_id)
+        buf = io.BytesIO()
+        await tg_file.download_to_memory(buf)
+        return buf.getvalue()
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -130,7 +153,7 @@ async def process_image_message(
     status_msg = await update.message.reply_text(MSG_PROCESSING)
     try:
         async def do_process():
-            image_bytes = await _download_file(file_id, context)
+            image_bytes = await _download_file(file_id, context.bot.token, context)
 
             loop = asyncio.get_event_loop()
             result_bytes, out_filename = await loop.run_in_executor(
@@ -168,7 +191,7 @@ async def process_video_message(
     status_msg = await update.message.reply_text(MSG_PROCESSING)
     try:
         async def do_process():
-            video_bytes = await _download_file(file_id, context)
+            video_bytes = await _download_file(file_id, context.bot.token, context)
 
             logger.info(
                 f"Downloaded video: {filename} "
@@ -208,7 +231,13 @@ def main() -> None:
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable is not set")
 
-    app = Application.builder().token(token).build()
+    logger.info(f"Starting bot. Local API: {'YES → ' + LOCAL_API_URL if USE_LOCAL_API else 'NO (standard API)'}")
+
+    builder = Application.builder().token(token)
+    if USE_LOCAL_API:
+        builder = builder.base_url(f"{LOCAL_API_URL}/bot").base_file_url(f"{LOCAL_API_URL}/file/bot")
+
+    app = builder.build()
 
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
