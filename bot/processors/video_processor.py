@@ -69,9 +69,10 @@ def get_video_info(probe_data: dict) -> dict:
         "width": 1280,
         "height": 720,
         "fps": "30",
-        "bitrate": "2000k",
+        "bitrate_kbps": 0,
         "codec": "libx264",
         "audio_codec": "aac",
+        "audio_sample_rate": 44100,
         "duration": 0.0,
         "has_audio": False,
     }
@@ -90,8 +91,11 @@ def get_video_info(probe_data: dict) -> dict:
                 info["fps"] = "30"
         elif stream.get("codec_type") == "audio":
             info["has_audio"] = True
-            audio_codec = stream.get("codec_name", "aac")
             info["audio_codec"] = "aac"
+            try:
+                info["audio_sample_rate"] = int(stream.get("sample_rate", 44100))
+            except Exception:
+                info["audio_sample_rate"] = 44100
 
     fmt = probe_data.get("format", {})
     try:
@@ -102,8 +106,7 @@ def get_video_info(probe_data: dict) -> dict:
     bit_rate = fmt.get("bit_rate")
     if bit_rate:
         try:
-            kbps = int(bit_rate) // 1000
-            info["bitrate"] = f"{kbps}k"
+            info["bitrate_kbps"] = max(int(bit_rate) // 1000, 100)
         except Exception:
             pass
 
@@ -115,18 +118,11 @@ def build_video_filter(info: dict) -> str:
     w = info["width"]
     h = info["height"]
 
-    # Percentage-based crop (3–5% per side) for meaningful pHash change
-    # on any resolution (e.g. 1080x1920 → ~32–54px each side).
-    crop_left   = int(w * random.uniform(0.03, 0.05))
-    crop_right  = int(w * random.uniform(0.03, 0.05))
-    crop_top    = int(h * random.uniform(0.03, 0.05))
-    crop_bottom = int(h * random.uniform(0.03, 0.05))
-
-    # Keep values even (required by libx264)
-    crop_left   = max(crop_left, 2)
-    crop_right  = max(crop_right, 2)
-    crop_top    = max(crop_top, 2)
-    crop_bottom = max(crop_bottom, 2)
+    # Crop 1–2% per side — invisible to human eye but changes pHash
+    crop_left   = max(int(w * random.uniform(0.01, 0.02)), 2)
+    crop_right  = max(int(w * random.uniform(0.01, 0.02)), 2)
+    crop_top    = max(int(h * random.uniform(0.01, 0.02)), 2)
+    crop_bottom = max(int(h * random.uniform(0.01, 0.02)), 2)
 
     cropped_w = w - crop_left - crop_right
     cropped_h = h - crop_top - crop_bottom
@@ -135,52 +131,46 @@ def build_video_filter(info: dict) -> str:
     if cropped_h % 2 != 0:
         cropped_h -= 1
 
-    # Scale back to original ±2px (different resolution → different hash)
-    out_w = w + random.choice([-2, -1, 0, 1, 2])
-    out_h = h + random.choice([-2, -1, 0, 1, 2])
-    out_w = max(out_w, 4)
-    out_h = max(out_h, 4)
+    # Scale back to original (lanczos resampling changes hash)
+    out_w = w
+    out_h = h
     if out_w % 2 != 0:
         out_w += 1
     if out_h % 2 != 0:
         out_h += 1
 
-    # Rotation 0.5–1.0° — more interpolation = more pHash change
-    angle_deg = round(random.uniform(0.5, 1.0) * random.choice([-1, 1]), 3)
+    # Very small rotation (0.1–0.3°) — barely visible, creates interpolation artifacts
+    angle_deg = round(random.uniform(0.1, 0.3) * random.choice([-1, 1]), 3)
     angle_rad = round(angle_deg * 3.14159265 / 180, 6)
 
-    noise_strength = random.randint(3, 5)
-    brightness = round(random.uniform(-0.008, 0.008), 4)
-    contrast   = round(random.uniform(0.993, 1.007), 4)
-    saturation = round(random.uniform(0.993, 1.007), 4)
-    gamma      = round(random.uniform(0.997, 1.003), 4)
-    hue_h      = round(random.uniform(-1.0, 1.0), 3)
-    hue_s      = round(random.uniform(0.995, 1.005), 4)
+    # Subtle adjustments — not visible to naked eye
+    noise_strength = random.randint(1, 2)
+    brightness = round(random.uniform(-0.005, 0.005), 4)
+    contrast   = round(random.uniform(0.996, 1.004), 4)
+    saturation = round(random.uniform(0.997, 1.003), 4)
+    gamma      = round(random.uniform(0.998, 1.002), 4)
+    hue_h      = round(random.uniform(-0.5, 0.5), 3)
+    hue_s      = round(random.uniform(0.998, 1.002), 4)
 
-    # Subtle color channel shift: R+2, G-1, B+1 (colorbalance range is -1..1)
-    cb_rs = round(random.uniform(0.015, 0.025), 3)
-    cb_gs = round(random.uniform(-0.015, -0.005), 3)
-    cb_bs = round(random.uniform(0.005, 0.015), 3)
-
-    # Vignette angle and mid-point (keeps center bright, dims edges slightly)
-    vignette_angle = round(random.uniform(0.5, 0.55), 3)   # ~PI/6 ≈ 0.524
-    vignette_mid   = round(random.uniform(0.25, 0.35), 3)  # ~0.3
+    # Subtle color channel shift
+    cb_rs = round(random.uniform(0.005, 0.015), 3)
+    cb_gs = round(random.uniform(-0.010, -0.002), 3)
+    cb_bs = round(random.uniform(0.002, 0.010), 3)
 
     filters = [
         f"crop={cropped_w}:{cropped_h}:{crop_left}:{crop_top}",
         f"scale={out_w}:{out_h}:flags=lanczos",
-        f"rotate={angle_rad}:c=black@0:ow=iw:oh=ih",
+        f"rotate={angle_rad}:c=black:ow=iw:oh=ih",
         f"noise=c0s={noise_strength}:c0f=t",
         f"eq=brightness={brightness}:contrast={contrast}:saturation={saturation}:gamma={gamma}",
         f"hue=h={hue_h}:s={hue_s}",
         f"colorbalance=rs={cb_rs}:gs={cb_gs}:bs={cb_bs}",
-        f"vignette={vignette_angle}:{vignette_mid}",
     ]
 
     logger.info(
         f"Video filter: crop=({crop_left},{crop_top},{crop_right},{crop_bottom}) "
         f"scale={out_w}x{out_h} rotate={angle_deg}° noise={noise_strength} "
-        f"colorbalance=rs={cb_rs}:gs={cb_gs}:bs={cb_bs} vignette={vignette_angle}"
+        f"colorbalance=rs={cb_rs}:gs={cb_gs}:bs={cb_bs}"
     )
     return ",".join(filters)
 
@@ -188,26 +178,39 @@ def build_video_filter(info: dict) -> str:
 def process_video(input_path: str, output_path: str) -> None:
     try:
         probe_data = probe_video(input_path)
-    except Exception as e:
+    except Exception:
         logger.error(f"probe_video failed:\n{traceback.format_exc()}")
         raise
 
     try:
         info = get_video_info(probe_data)
-    except Exception as e:
+    except Exception:
         logger.error(f"get_video_info failed:\n{traceback.format_exc()}")
         raise
 
     try:
         vf = build_video_filter(info)
-    except Exception as e:
+    except Exception:
         logger.error(f"build_video_filter failed:\n{traceback.format_exc()}")
         raise
 
-    audio_tempo = round(random.uniform(0.999, 1.001), 4)
-    audio_pitch = round(random.uniform(0.999, 1.001), 4)
-    fps_variation = round(float(info["fps"]) + random.uniform(-0.1, 0.1), 3)
-    crf = random.randint(20, 24)
+    # Very slight tempo shift (0.1% max) — safe range for atempo is 0.5–2.0
+    audio_tempo = round(random.uniform(0.9995, 1.0005), 4)
+    fps_variation = round(float(info["fps"]) + random.uniform(-0.05, 0.05), 3)
+
+    # Target original bitrate to preserve file size.
+    # If unknown, fall back to CRF 18 (high quality).
+    orig_kbps = info["bitrate_kbps"]
+    if orig_kbps > 0:
+        video_bitrate_args = [
+            "-b:v", f"{orig_kbps}k",
+            "-maxrate", f"{int(orig_kbps * 1.3)}k",
+            "-bufsize", f"{int(orig_kbps * 2)}k",
+        ]
+        logger.info(f"Using target bitrate: {orig_kbps}k (original)")
+    else:
+        video_bitrate_args = ["-crf", "18"]
+        logger.info("Bitrate unknown, using CRF 18")
 
     cmd = [
         "ffmpeg", "-y",
@@ -231,7 +234,7 @@ def process_video(input_path: str, output_path: str) -> None:
         "-vf", vf,
         "-c:v", "libx264",
         "-preset", "medium",
-        "-crf", str(crf),
+        *video_bitrate_args,
         "-r", str(fps_variation),
         "-movflags", "+faststart",
         # Suppress FFmpeg self-added encoder tags
@@ -240,13 +243,13 @@ def process_video(input_path: str, output_path: str) -> None:
         "-flags:a", "+bitexact",
     ]
 
+    sample_rate = info["audio_sample_rate"]
     if info["has_audio"]:
-        af = f"atempo={audio_tempo},asetrate=44100*{audio_pitch},aresample=44100"
         cmd += [
             "-c:a", "aac",
             "-b:a", "128k",
-            "-ar", "44100",
-            "-af", af,
+            "-ar", str(sample_rate),
+            "-af", f"atempo={audio_tempo}",
             "-metadata:s:a", "handler_name=",
             "-metadata:s:a", "language=",
         ]
@@ -257,7 +260,7 @@ def process_video(input_path: str, output_path: str) -> None:
 
     try:
         _run_ffmpeg(cmd, timeout=600)
-    except Exception as e:
+    except Exception:
         logger.error(f"FFmpeg processing failed:\n{traceback.format_exc()}")
         raise
 
