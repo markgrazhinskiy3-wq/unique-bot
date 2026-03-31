@@ -5,8 +5,6 @@ import logging
 import traceback
 from pathlib import Path
 
-import httpx
-
 from telegram import Update, Document, PhotoSize
 from telegram.ext import (
     Application,
@@ -30,11 +28,8 @@ logger = logging.getLogger(__name__)
 SUPPORTED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 SUPPORTED_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
-# Local Bot API server removes the 20 MB limit — allow up to 2 GB
-TELEGRAM_FILE_SIZE_LIMIT = 2000 * 1024 * 1024  # 2 GB
-
-# Local Telegram Bot API server URL (set to use your own server, removes 20 MB limit)
-LOCAL_API_URL = os.environ.get("LOCAL_BOT_API_URL", "http://95.163.152.163:8081")
+# Standard Telegram Bot API limits: receive up to 20 MB, send up to 50 MB
+TELEGRAM_FILE_SIZE_LIMIT = 20 * 1024 * 1024  # 20 MB
 
 DEBUG_ERRORS = os.environ.get("DEBUG_ERRORS", "true").lower() == "true"
 PROCESSING_TIMEOUT = 300
@@ -45,45 +40,16 @@ MSG_START = (
     "📸 Фото — отправляй как файл (документ) для лучшего качества.\n"
     "🎬 Видео — отправляй как файл (документ).\n\n"
     "Можно отправлять и обычным способом (сжатым), но качество будет хуже.\n\n"
-    "⚠️ Максимальный размер файла: 2 ГБ."
+    "⚠️ Максимальный размер файла: 20 МБ."
 )
 MSG_PROCESSING = "⏳ Обрабатываю файл, подожди немного..."
 MSG_WRONG_FORMAT = "⚠️ Неподдерживаемый формат. Отправьте фото или видео."
 MSG_PROCESSING_ERROR = "❌ Ошибка обработки. Попробуйте ещё раз."
 MSG_TIMEOUT = "⏱ Слишком долгая обработка. Попробуйте файл поменьше."
 MSG_TOO_LARGE = (
-    "⚠️ Файл слишком большой (лимит 2 ГБ).\n"
+    "⚠️ Файл слишком большой (лимит 20 МБ).\n"
     "Отправьте файл меньшего размера."
 )
-
-
-async def _download_file(file_id: str, token: str) -> bytes:
-    """Download a file from the local bot API server, fixing the double-slash URL bug.
-
-    PTB constructs: base_file_url + token + "/" + file_path
-    Local server returns file_path with a leading "/" (e.g. "/{token}/documents/file.png")
-    This causes a double slash: .../bot{token}//{token}/documents/file.png → 404
-
-    Fix: strip the leading slash and build the URL manually.
-    """
-    async with httpx.AsyncClient(timeout=300) as client:
-        # Step 1: get file_path from local API
-        resp = await client.post(
-            f"{LOCAL_API_URL}/bot{token}/getFile",
-            json={"file_id": file_id},
-        )
-        resp.raise_for_status()
-        file_path = resp.json()["result"]["file_path"]
-
-        # Step 2: strip leading slash to avoid double-slash in URL
-        file_path = file_path.lstrip("/")
-
-        # Step 3: download from correct URL
-        download_url = f"{LOCAL_API_URL}/file/bot{token}/{file_path}"
-        logger.info(f"Downloading file from: {download_url}")
-        file_resp = await client.get(download_url)
-        file_resp.raise_for_status()
-        return file_resp.content
 
 
 def _error_msg(label: str, e: Exception) -> str:
@@ -94,10 +60,16 @@ def _error_msg(label: str, e: Exception) -> str:
 
 
 def _check_file_size(file_size: int | None) -> bool:
-    """Returns True if file is within allowed size, False if too large."""
     if file_size is None:
         return True
     return file_size <= TELEGRAM_FILE_SIZE_LIMIT
+
+
+async def _download_file(file_id: str, context: ContextTypes.DEFAULT_TYPE) -> bytes:
+    tg_file = await context.bot.get_file(file_id)
+    buf = io.BytesIO()
+    await tg_file.download_to_memory(buf)
+    return buf.getvalue()
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -158,7 +130,7 @@ async def process_image_message(
     status_msg = await update.message.reply_text(MSG_PROCESSING)
     try:
         async def do_process():
-            image_bytes = await _download_file(file_id, context.bot.token)
+            image_bytes = await _download_file(file_id, context)
 
             loop = asyncio.get_event_loop()
             result_bytes, out_filename = await loop.run_in_executor(
@@ -196,7 +168,7 @@ async def process_video_message(
     status_msg = await update.message.reply_text(MSG_PROCESSING)
     try:
         async def do_process():
-            video_bytes = await _download_file(file_id, context.bot.token)
+            video_bytes = await _download_file(file_id, context)
 
             logger.info(
                 f"Downloaded video: {filename} "
@@ -226,13 +198,6 @@ async def process_video_message(
     except asyncio.TimeoutError:
         logger.error(f"Video processing timeout for {filename}")
         await status_msg.edit_text(MSG_TIMEOUT)
-    except ValueError as e:
-        msg = str(e)
-        if "20MB" in msg or "лимит" in msg:
-            await status_msg.edit_text(msg)
-        else:
-            logger.error(f"Video ValueError:\n{traceback.format_exc()}")
-            await status_msg.edit_text(_error_msg("видео", e))
     except Exception as e:
         logger.error(f"Video processing error for {filename}:\n{traceback.format_exc()}")
         await status_msg.edit_text(_error_msg("видео", e))
@@ -243,13 +208,7 @@ def main() -> None:
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN environment variable is not set")
 
-    app = (
-        Application.builder()
-        .token(token)
-        .base_url(f"{LOCAL_API_URL}/bot")
-        .base_file_url(f"{LOCAL_API_URL}/file/bot")
-        .build()
-    )
+    app = Application.builder().token(token).build()
 
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
