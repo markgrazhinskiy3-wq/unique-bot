@@ -5,6 +5,7 @@ import logging
 import traceback
 import subprocess
 import tempfile
+import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -198,8 +199,41 @@ def process_video(input_path: str, output_path: str) -> None:
     audio_tempo = round(random.uniform(0.9995, 1.0005), 4)
     fps_variation = round(float(info["fps"]) + random.uniform(-0.05, 0.05), 3)
 
+    # ── 1. GOP randomization ──────────────────────────────────────────────────
+    # Default GOP is typically 2×fps. Randomizing changes keyframe structure,
+    # which is a strong signal Facebook uses for video fingerprinting.
+    fps_num = float(info["fps"])
+    gop_size = random.randint(int(fps_num * 1.5), int(fps_num * 4))
+    gop_size = max(gop_size, 1)
+    keyint_min = max(1, gop_size // 4)
+    logger.info(f"GOP: gop={gop_size} keyint_min={keyint_min}")
+
+    # ── 2. Fake metadata injection ────────────────────────────────────────────
+    # Randomize creation_time (random day in last 2 years) and encoder string.
+    # Facebook reads container metadata — different values = different fingerprint.
+    days_ago = random.randint(1, 730)
+    rand_dt = datetime.datetime.now() - datetime.timedelta(
+        days=days_ago,
+        hours=random.randint(0, 23),
+        minutes=random.randint(0, 59),
+        seconds=random.randint(0, 59),
+    )
+    creation_time = rand_dt.strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+    encoder_tags = [
+        "Lavf58.76.100", "Lavf59.16.100", "Lavf60.3.100",
+        "Lavf58.45.100", "Lavf59.27.100",
+    ]
+    fake_encoder = random.choice(encoder_tags)
+    logger.info(f"Metadata: creation_time={creation_time} encoder={fake_encoder}")
+
+    # ── 3. Audio resampling (±1 Hz) ───────────────────────────────────────────
+    # 44099 or 44101 instead of 44100 changes every DCT/FFT block in the audio
+    # stream, defeating audio fingerprinting entirely.
+    orig_sample_rate = info["audio_sample_rate"]
+    audio_resample_rate = orig_sample_rate + random.choice([-1, 1])
+    logger.info(f"Audio resample: {orig_sample_rate} → {audio_resample_rate} Hz")
+
     # Target original bitrate to preserve file size.
-    # If unknown, fall back to CRF 18 (high quality).
     orig_kbps = info["bitrate_kbps"]
     if orig_kbps > 0:
         video_bitrate_args = [
@@ -215,17 +249,17 @@ def process_video(input_path: str, output_path: str) -> None:
     cmd = [
         "ffmpeg", "-y",
         "-i", input_path,
-        # Strip ALL metadata: global, stream-level, chapters
+        # Strip ALL original metadata
         "-map_metadata", "-1",
         "-map_metadata:s:v", "-1",
         "-map_metadata:s:a", "-1",
         "-map_chapters", "-1",
-        # Clear common tags explicitly
+        # Inject randomized metadata (different fingerprint each run)
+        "-metadata", f"creation_time={creation_time}",
+        "-metadata", f"encoder={fake_encoder}",
         "-metadata", "title=",
         "-metadata", "comment=",
         "-metadata", "description=",
-        "-metadata", "creation_time=",
-        "-metadata", "encoder=",
         "-metadata", "copyright=",
         # Clear stream handler names
         "-metadata:s:v", "handler_name=",
@@ -236,19 +270,21 @@ def process_video(input_path: str, output_path: str) -> None:
         "-preset", "medium",
         *video_bitrate_args,
         "-r", str(fps_variation),
+        # GOP randomization — changes keyframe structure
+        "-g", str(gop_size),
+        "-keyint_min", str(keyint_min),
         "-movflags", "+faststart",
-        # Suppress FFmpeg self-added encoder tags
         "-fflags", "+bitexact",
         "-flags:v", "+bitexact",
         "-flags:a", "+bitexact",
     ]
 
-    sample_rate = info["audio_sample_rate"]
     if info["has_audio"]:
         cmd += [
             "-c:a", "aac",
             "-b:a", "128k",
-            "-ar", str(sample_rate),
+            # Resample to ±1 Hz — changes every audio block's hash
+            "-ar", str(audio_resample_rate),
             "-af", f"atempo={audio_tempo}",
             "-metadata:s:a", "handler_name=",
             "-metadata:s:a", "language=",
