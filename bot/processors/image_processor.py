@@ -428,7 +428,14 @@ def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, st
     original_format = img.format
     original_size = img.size
 
-    if img.mode not in ("RGB", "RGBA", "L"):
+    # Normalise to RGB immediately — all processing steps expect 3-channel data.
+    # RGBA: composite onto white background (Facebook ads never use transparency).
+    # Palette / L / other: convert directly to RGB.
+    if img.mode == "RGBA":
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[3])
+        img = bg
+    elif img.mode != "RGB":
         img = img.convert("RGB")
 
     fmt = _detect_format(img, original_format)
