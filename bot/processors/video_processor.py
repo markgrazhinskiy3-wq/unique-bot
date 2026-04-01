@@ -164,8 +164,15 @@ def build_video_filter(info: dict) -> str:
     r_shift = random.randint(1, 2) * random.choice([-1, 1])
     b_shift = -r_shift  # opposite direction for classic aberration look
 
+    # Downscale → Upscale: temporarily reduce to 75% resolution with bicubic,
+    # then scale back up with lanczos. Destroys DCT block alignment of every frame.
+    ds_w = f"trunc(iw*0.75/2)*2"
+    ds_h = f"trunc(ih*0.75/2)*2"
+
     filters = [
         f"crop={cropped_w}:{cropped_h}:{crop_left}:{crop_top}",
+        f"scale={out_w}:{out_h}:flags=lanczos",
+        f"scale={ds_w}:{ds_h}:flags=bicubic",
         f"scale={out_w}:{out_h}:flags=lanczos",
         f"rotate={angle_rad}:c=black:ow=iw:oh=ih",
         f"noise=c0s={noise_strength}:c0f=t",
@@ -256,18 +263,29 @@ def process_video(input_path: str, output_path: str) -> None:
     sc_threshold = random.randint(25, 55)
     logger.info(f"sc_threshold: {sc_threshold}")
 
-    # Target original bitrate to preserve file size.
+    # ── 7. Random CRF (18–22) ─────────────────────────────────────────────────
+    # Each CRF value produces a structurally different file even with identical input.
+    crf_value = random.randint(18, 22)
+    logger.info(f"CRF: {crf_value}")
+
     orig_kbps = info["bitrate_kbps"]
     if orig_kbps > 0:
+        # CRF for quality + maxrate cap to stay near original size
         video_bitrate_args = [
-            "-b:v", f"{orig_kbps}k",
+            "-crf", str(crf_value),
             "-maxrate", f"{int(orig_kbps * 1.3)}k",
             "-bufsize", f"{int(orig_kbps * 2)}k",
         ]
-        logger.info(f"Using target bitrate: {orig_kbps}k (original)")
+        logger.info(f"CRF={crf_value} with maxrate={int(orig_kbps * 1.3)}k")
     else:
-        video_bitrate_args = ["-crf", "18"]
-        logger.info("Bitrate unknown, using CRF 18")
+        video_bitrate_args = ["-crf", str(crf_value)]
+        logger.info(f"Bitrate unknown, using CRF {crf_value}")
+
+    # ── 8. Color space tag ────────────────────────────────────────────────────
+    # BT.709 (HD standard) vs smpte170m (BT.601, SD standard).
+    # Changes the colorspace header in the video stream — a technical fingerprint.
+    colorspace = random.choice(["bt709", "smpte170m"])
+    logger.info(f"Color space: {colorspace}")
 
     cmd = [
         "ffmpeg", "-y",
@@ -299,6 +317,10 @@ def process_video(input_path: str, output_path: str) -> None:
         "-bf", str(b_frames),
         "-profile:v", h264_profile,
         "-sc_threshold", str(sc_threshold),
+        # Color space tag — changes stream header (bt709 vs bt601/smpte170m)
+        "-colorspace", colorspace,
+        "-color_primaries", colorspace,
+        "-color_trc", colorspace,
         "-movflags", "+faststart",
         "-fflags", "+bitexact",
         "-flags:v", "+bitexact",
