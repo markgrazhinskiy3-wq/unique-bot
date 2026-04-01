@@ -174,7 +174,7 @@ def build_video_filter(info: dict) -> str:
         f"scale={out_w}:{out_h}:flags=lanczos",
         f"scale={ds_w}:{ds_h}:flags=bicubic",
         f"scale={out_w}:{out_h}:flags=lanczos",
-        f"rotate={angle_rad}:c=black:ow=iw:oh=ih",
+        f"rotate={angle_rad}:fillcolor=black:ow=iw:oh=ih",
         f"noise=c0s={noise_strength}:c0f=t",
         f"eq=brightness={brightness}:contrast={contrast}:saturation={saturation}:gamma={gamma}",
         f"hue=h={hue_h}:s={hue_s}",
@@ -291,13 +291,20 @@ def process_video(input_path: str, output_path: str) -> None:
     colorspace = random.choice(["bt709", "smpte170m"])
     logger.info(f"Color space: {colorspace}")
 
+    # Explicit stream mapping: only take first video + first audio stream.
+    # Without this, FFmpeg tries to process ALL streams in the container
+    # (MOV/QT files often embed timecode, metadata, and subtitle tracks
+    # that libx264 can't encode → "Invalid argument" on open).
+    map_args = ["-map", "0:v:0"]
+    if info["has_audio"]:
+        map_args += ["-map", "0:a:0"]
+
     cmd = [
         "ffmpeg", "-y",
         "-i", input_path,
+        *map_args,
         # Strip ALL original metadata
         "-map_metadata", "-1",
-        "-map_metadata:s:v", "-1",
-        "-map_metadata:s:a", "-1",
         "-map_chapters", "-1",
         # Inject randomized metadata (different fingerprint each run)
         "-metadata", f"creation_time={creation_time}",
