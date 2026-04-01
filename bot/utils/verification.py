@@ -131,6 +131,8 @@ _CONTAINER_FIELDS = {"major_brand", "minor_version", "compatible_brands"}
 # Codec/muxer-added stream tags — set by libx264/libfdk_aac/MP4 muxer itself
 _STREAM_FIELDS_SKIP = {
     "vendor_id", "handler_name", "language", "encoder",
+    "creation_time",  # auto-set by muxer on each stream
+    "timecode",       # timecode track tag from original container
 }
 
 # Format-level tags that WE intentionally inject (fake values) — not original metadata
