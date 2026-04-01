@@ -301,6 +301,7 @@ def process_video(input_path: str, output_path: str) -> None:
 
     cmd = [
         "ffmpeg", "-y",
+        "-threads", "0",  # use all available CPU cores
         "-i", input_path,
         *map_args,
         # Strip ALL original metadata

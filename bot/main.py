@@ -44,7 +44,7 @@ ADMIN_USER_ID = int(os.environ.get("ADMIN_USER_ID", "437752097"))
 WHITELIST_PATH = Path(os.environ.get("WHITELIST_PATH", "/data/whitelist.json"))
 
 DEBUG_ERRORS = os.environ.get("DEBUG_ERRORS", "true").lower() == "true"
-PROCESSING_TIMEOUT = 300
+PROCESSING_TIMEOUT = 1200  # 20 min — enough for large files (100–200 MB)
 
 
 def _load_whitelist() -> set[int]:
