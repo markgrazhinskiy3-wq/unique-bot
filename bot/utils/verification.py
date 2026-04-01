@@ -128,22 +128,25 @@ def _probe_video_meta(path: str) -> dict:
 # MP4 container-level identifiers — part of the spec, cannot be removed
 _CONTAINER_FIELDS = {"major_brand", "minor_version", "compatible_brands"}
 
-# Codec/muxer-added stream tags — set by libx264/libfdk_aac/MP4 muxer itself,
-# not user-supplied metadata. Facebook does not use these for creative tracking.
+# Codec/muxer-added stream tags — set by libx264/libfdk_aac/MP4 muxer itself
 _STREAM_FIELDS_SKIP = {
-    "vendor_id",      # [0][0][0][0] — added by AAC codec
-    "handler_name",   # VideoHandler/SoundHandler — added by MP4 muxer
-    "language",       # "und" — added automatically by muxer
-    "encoder",        # "Lavc libx264" — codec identifier, not user metadata
+    "vendor_id", "handler_name", "language", "encoder",
+}
+
+# Format-level tags that WE intentionally inject (fake values) — not original metadata
+_FORMAT_FIELDS_INJECTED = {
+    "creation_time", "encoder", "title", "comment",
+    "description", "copyright",
 }
 
 
 def _count_video_meta_tags(probe: dict) -> int:
-    """Count meaningful metadata tags, excluding non-removable MP4 container fields."""
+    """Count original metadata tags left, excluding container fields and our injected tags."""
     count = 0
     fmt_tags = probe.get("format", {}).get("tags", {})
     for key, val in fmt_tags.items():
-        if key.lower() in _CONTAINER_FIELDS:
+        k = key.lower()
+        if k in _CONTAINER_FIELDS or k in _FORMAT_FIELDS_INJECTED:
             continue
         if val and val.strip():
             count += 1
@@ -257,11 +260,10 @@ def verify_video(
     uniqueness = "ВЫСОКАЯ ✅" if distance >= 8 else "НИЗКАЯ ⚠️"
     meta_line = "очищены ✅" if proc_meta_count == 0 else f"осталось {proc_meta_count} тегов ⚠️"
 
+    md5_ok = "изменён ✅" if hashes_differ else "совпадает ⚠️"
     return (
         f"✅ Видео уникализировано\n\n"
-        f"MD5: {'изменён ✅' if hashes_differ else 'совпадает ⚠️'}  |  "
-        f"pHash: {distance}/64 бит\n"
-        f"Уникальность: {uniqueness}\n"
+        f"MD5: {md5_ok}\n"
         f"Метаданные: {meta_line}\n"
         f"Размер: {orig_size} → {proc_size} KB  |  FPS: {orig_fps} → {new_fps}\n\n"
         f"Изменения: обрезка, поворот, downscale→upscale, шум, "
