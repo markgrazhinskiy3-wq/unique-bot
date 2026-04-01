@@ -241,11 +241,15 @@ def process_video(input_path: str, output_path: str) -> None:
     fake_encoder = random.choice(encoder_tags)
     logger.info(f"Metadata: creation_time={creation_time} encoder={fake_encoder}")
 
-    # ── 3. Audio resampling (±1 Hz) ───────────────────────────────────────────
-    # 44099 or 44101 instead of 44100 changes every DCT/FFT block in the audio
-    # stream, defeating audio fingerprinting entirely.
+    # ── 3. Audio resampling ───────────────────────────────────────────────────
+    # Randomly output at 44100 or 48000 Hz — both are valid AAC sample rates.
+    # Resampling between them completely recomputes all audio blocks,
+    # defeating audio fingerprinting without causing encoder errors.
     orig_sample_rate = info["audio_sample_rate"]
-    audio_resample_rate = orig_sample_rate + random.choice([-1, 1])
+    valid_rates = [44100, 48000]
+    # Pick a rate different from the original if possible
+    other_rates = [r for r in valid_rates if r != orig_sample_rate]
+    audio_resample_rate = random.choice(other_rates) if other_rates else random.choice(valid_rates)
     logger.info(f"Audio resample: {orig_sample_rate} → {audio_resample_rate} Hz")
 
     # ── 4. B-frames randomization ─────────────────────────────────────────────
