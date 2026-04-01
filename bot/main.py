@@ -74,15 +74,26 @@ def _check_file_size(file_size: int | None) -> bool:
 
 async def _download_file(file_id: str, token: str, context: ContextTypes.DEFAULT_TYPE) -> bytes:
     if USE_LOCAL_API:
-        # Local API returns file_path with leading slash — fix the double-slash bug
         async with httpx.AsyncClient(timeout=300) as client:
             resp = await client.post(
                 f"{LOCAL_API_URL}/bot{token}/getFile",
                 json={"file_id": file_id},
             )
             resp.raise_for_status()
-            file_path = resp.json()["result"]["file_path"].lstrip("/")
-            download_url = f"{LOCAL_API_URL}/file/bot{token}/{file_path}"
+            file_path = resp.json()["result"]["file_path"]
+
+            # In --local mode the server returns an absolute filesystem path like:
+            # /var/lib/telegram-bot-api/{token}/documents/file_0.png
+            # Correct download URL: {LOCAL_API_URL}/file/bot{token}/documents/file_0.png
+            # We must strip everything up to and including /{token}/
+            token_marker = f"/{token}/"
+            if token_marker in file_path:
+                relative_path = file_path.split(token_marker, 1)[1]
+            else:
+                # Fallback for non-local mode (leading slash only)
+                relative_path = file_path.lstrip("/")
+
+            download_url = f"{LOCAL_API_URL}/file/bot{token}/{relative_path}"
             logger.info(f"Downloading via local API: {download_url}")
             file_resp = await client.get(download_url)
             file_resp.raise_for_status()
