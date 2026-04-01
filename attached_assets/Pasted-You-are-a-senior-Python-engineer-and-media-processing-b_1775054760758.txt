@@ -1,0 +1,286 @@
+You are a senior Python engineer and media-processing backend developer.
+
+I have a Telegram bot that processes and transforms user-uploaded images and videos using Pillow and FFmpeg. The bot already works. Your task is to significantly improve the media processing pipeline, code architecture, and add a randomized processing system while keeping the visual output almost identical for a normal human viewer.
+
+Important:
+The visual appearance of the output media should remain almost the same as the original. Changes should be minimal and not noticeable to a typical user, but the file and encoding structure should differ due to processing and re-encoding steps.
+
+Do NOT rewrite everything from scratch unless necessary. Improve and extend the existing codebase.
+
+================================
+PART 1 — PROJECT AUDIT
+================================
+
+First, inspect the existing project and identify:
+- Where Telegram file download is implemented
+- Where image processing is implemented
+- Where video processing (FFmpeg) is implemented
+- Where temporary files are stored
+- Where output files are generated
+- Where FFmpeg commands are built
+- Where errors are handled
+- Where logging is done (if any)
+
+List weaknesses:
+- giant functions
+- duplicated code
+- hardcoded parameters
+- no presets
+- no randomization
+- no output validation
+- no cleanup of temp files
+- poor error handling
+- blocking processing in Telegram handlers
+- missing structure
+
+Then propose a cleaner structure.
+
+================================
+PART 2 — RECOMMENDED STRUCTURE
+================================
+
+Refactor or organize code into logical modules such as:
+
+/core
+    config.py
+    logging.py
+    utils.py
+
+/services
+    file_service.py
+    job_service.py
+    ffmpeg_service.py
+    metadata_service.py
+
+/processors
+    image_processor.py
+    video_processor.py
+    audio_processor.py
+    pipeline_builder.py
+    presets.py
+
+/workers
+    media_worker.py
+
+The exact structure may be adapted to the current project.
+
+================================
+PART 3 — PRESET SYSTEM
+================================
+
+Implement a preset system for processing.
+
+Image presets:
+- light
+- balanced
+- stronger
+
+Video presets:
+- fast
+- balanced
+- high_variation
+
+Each preset must define:
+- enabled operations
+- probability of each operation
+- parameter ranges
+
+Example parameters:
+- rotate range
+- crop range
+- scale up range
+- brightness range
+- contrast range
+- noise strength
+- blur radius
+- sharpen strength
+- fps variation
+- bitrate variation
+- gop size range
+- pixel format options
+- audio sample rate options
+
+Presets should be stored in a structured way:
+- JSON
+- YAML
+- or Python config dictionary/dataclass
+
+================================
+PART 4 — RANDOM PIPELINE GENERATOR
+================================
+
+Implement a random pipeline generator:
+
+For each media file:
+1. Load preset
+2. Randomly decide which operations to apply based on probabilities
+3. Randomly generate parameters within ranges
+4. Build processing pipeline
+5. Execute pipeline
+6. Validate output
+
+The pipeline should not always apply the same filters.
+Each run should produce slightly different processing parameters.
+
+================================
+PART 5 — IMAGE PROCESSING IMPROVEMENTS
+================================
+
+Improve image processing pipeline with minimal visible changes.
+
+Possible operations:
+- strip metadata
+- small asymmetric crop
+- very small rotation
+- scale up 101–103% then scale back
+- very small brightness adjustment
+- very small contrast adjustment
+- very small saturation adjustment
+- very small hue shift
+- very low Gaussian noise
+- very mild blur
+- sharpen after blur
+- subpixel-like shift using pad + crop
+- JPEG quality variation
+- chroma subsampling variation
+- RGB → YUV → RGB conversion
+- resize up → resize down
+- re-encode with different compression parameters
+
+Build a clean image processing pipeline like:
+
+load image
+strip metadata
+apply geometry transforms
+apply color transforms
+apply noise
+apply blur/sharpen
+re-encode
+save result
+validate result
+
+Each step should be a separate function.
+
+================================
+PART 6 — VIDEO PROCESSING IMPROVEMENTS
+================================
+
+Build a structured FFmpeg pipeline builder instead of one hardcoded command.
+
+Pipeline stages may include:
+- fps adjustment
+- scale up then scale down
+- small crop
+- small rotation
+- eq filter (brightness/contrast/saturation)
+- noise filter
+- blur filter
+- sharpen filter
+- subpixel shift via pad/crop
+- bitrate variation
+- GOP/keyframe interval variation
+- pixel format selection
+- metadata rewrite
+- audio tempo slight change
+- audio resample
+- audio volume slight change
+
+Create functions like:
+- analyze_video_with_ffprobe()
+- generate_processing_plan()
+- build_filter_chain()
+- build_ffmpeg_command()
+- run_ffmpeg()
+- validate_output()
+
+Do NOT build everything in one giant string.
+Build the command step by step.
+
+================================
+PART 7 — ENCODING RANDOMIZATION
+================================
+
+Randomize encoding parameters:
+- bitrate
+- maxrate
+- bufsize
+- gop size
+- keyint
+- pixel format
+- profile
+- level
+- audio sample rate
+- audio bitrate
+- metadata fields
+- encoder tag
+- creation_time
+
+================================
+PART 8 — FILE VALIDATION
+================================
+
+Before processing:
+- check file exists
+- check extension
+- detect real format
+- run ffprobe for video
+- check duration
+- check resolution
+- check file size
+
+After processing:
+- output file exists
+- file size > 0
+- ffprobe can open file
+- video stream exists
+- audio stream exists if expected
+- duration is valid
+- resolution valid
+- no corrupted output
+
+================================
+PART 9 — TEMP FILE MANAGEMENT
+================================
+
+Implement per-job folders:
+
+/data/jobs/{job_id}/original
+/data/jobs/{job_id}/temp
+/data/jobs/{job_id}/result
+
+Add cleanup:
+- delete temp files after success
+- delete temp files after failure
+- optional cleanup of old jobs
+
+================================
+PART 10 — LOGGING
+================================
+
+Add structured logging:
+- job id
+- user id
+- input file info
+- selected preset
+- selected random parameters
+- ffmpeg command
+- processing time
+- output file info
+- errors
+- cleanup actions
+
+================================
+PART 11 — OUTPUT REQUIREMENTS
+================================
+
+When modifying the project:
+1. Show what files need to be changed
+2. Show full updated code for each modified file
+3. Do not omit imports
+4. Do not write placeholders like "existing code here"
+5. Code must be ready to run
+6. Use clean Python
+7. Use functions, not giant scripts
+8. Add comments explaining important parts
+
+Start by auditing the existing code and then implement the preset system and pipeline builder first.
