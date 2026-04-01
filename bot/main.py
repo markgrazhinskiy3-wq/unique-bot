@@ -364,13 +364,13 @@ async def process_image_message(
             do_process(), timeout=PROCESSING_TIMEOUT
         )
 
-        await status_msg.delete()
         await update.message.reply_document(
             document=io.BytesIO(result_bytes),
             filename=out_filename,
             caption=caption,
             disable_content_type_detection=True,
         )
+        await status_msg.delete()
     except asyncio.TimeoutError:
         await status_msg.edit_text("⏱ Слишком долгая обработка. Попробуйте файл поменьше.")
     except Exception as e:
@@ -402,13 +402,13 @@ async def process_video_message(
             do_process(), timeout=PROCESSING_TIMEOUT
         )
 
-        await status_msg.delete()
         await update.message.reply_document(
             document=io.BytesIO(result_bytes),
             filename=out_filename,
             caption=caption,
             disable_content_type_detection=True,
         )
+        await status_msg.delete()
     except asyncio.TimeoutError:
         logger.error(f"Video processing timeout for {filename}")
         await status_msg.edit_text("⏱ Слишком долгая обработка. Попробуйте файл поменьше.")
