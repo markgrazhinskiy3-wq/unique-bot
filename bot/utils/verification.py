@@ -71,36 +71,19 @@ def verify_image(
     proc_md5 = md5_hash(processed_bytes)
     hashes_differ = orig_md5 != proc_md5
 
-    try:
-        orig_img = Image.open(io.BytesIO(original_bytes))
-        orig_phash = compute_phash(orig_img)
-    except Exception as e:
-        logger.warning(f"pHash original failed: {e}")
-        orig_phash = 0
-
-    try:
-        proc_img = Image.open(io.BytesIO(processed_bytes))
-        proc_phash = compute_phash(proc_img)
-    except Exception as e:
-        logger.warning(f"pHash processed failed: {e}")
-        proc_phash = 0
-
-    distance = hamming_distance(orig_phash, proc_phash)
-
     orig_exif = count_exif_tags(original_bytes)
     proc_exif = count_exif_tags(processed_bytes)
+    exif_line = "очищен ✅" if proc_exif == 0 else f"осталось {proc_exif} тегов ⚠️"
 
     orig_size = format_size_kb(original_bytes)
     proc_size = format_size_kb(processed_bytes)
 
-    uniqueness = "ВЫСОКАЯ ✅" if distance >= 8 else "НИЗКАЯ ⚠️"
-    hashes_line = "НЕТ ✅" if hashes_differ else "ДА ⚠️"
+    md5_ok = "изменён ✅" if hashes_differ else "совпадает ⚠️"
 
     return (
         f"✅ Фото уникализировано\n\n"
-        f"MD5: {'изменён ✅' if hashes_differ else 'совпадает ⚠️'}  |  "
-        f"pHash: {distance}/64 бит\n"
-        f"Уникальность: {uniqueness}\n"
+        f"MD5: {md5_ok}\n"
+        f"EXIF: {exif_line}\n"
         f"Размер: {orig_size} → {proc_size} KB\n\n"
         f"Изменения: обрезка, поворот, downscale→upscale, "
         f"яркость/контраст/насыщенность, hue, шум, виньетка, unsharp, "
