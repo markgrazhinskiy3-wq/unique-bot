@@ -82,15 +82,23 @@ async def _download_file(file_id: str, token: str, context: ContextTypes.DEFAULT
             resp.raise_for_status()
             file_path = resp.json()["result"]["file_path"]
 
-            # In --local mode the server returns an absolute filesystem path like:
+            # In --local mode, file_path is an absolute filesystem path:
             # /var/lib/telegram-bot-api/{token}/documents/file_0.png
-            # Correct download URL: {LOCAL_API_URL}/file/bot{token}/documents/file_0.png
-            # We must strip everything up to and including /{token}/
+
+            # Priority 1: read directly from disk (bot runs on the same host
+            # with the volume mounted) — fastest, no HTTP, no 404.
+            local_path = Path(file_path)
+            if local_path.exists():
+                logger.info(f"Reading file directly from disk: {file_path}")
+                return local_path.read_bytes()
+
+            # Priority 2: HTTP download via local API server.
+            # Strip the token directory prefix to get the relative path:
+            # /var/lib/telegram-bot-api/{token}/documents/file.png → documents/file.png
             token_marker = f"/{token}/"
             if token_marker in file_path:
                 relative_path = file_path.split(token_marker, 1)[1]
             else:
-                # Fallback for non-local mode (leading slash only)
                 relative_path = file_path.lstrip("/")
 
             download_url = f"{LOCAL_API_URL}/file/bot{token}/{relative_path}"
