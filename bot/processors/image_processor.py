@@ -472,17 +472,15 @@ def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, st
         # Inject fake EXIF (camera brand, model, software, random shoot date)
         out_data = _inject_fake_exif(out_data)
     elif fmt == "PNG":
-        out_data = _save_png(img_out, compress_level=9)
-        # If PNG inflated more than 1.5× (flat-color designs lose compression
-        # after pixel-level changes), fall back to high-quality JPEG.
-        if len(out_data) > original_file_size * 1.5:
-            logger.info(
-                f"[png] output {len(out_data)/1024:.0f}KB > 1.5× original "
-                f"{original_file_size/1024:.0f}KB — falling back to JPEG q=92"
-            )
-            jpg_img = img_out.convert("RGB") if img_out.mode == "RGBA" else img_out
-            out_data = _save_jpeg(jpg_img, quality=92, subsampling=0)
-            fmt = "JPEG"
+        # PNG lossless compression breaks badly after pixel-level changes —
+        # flat-color ad designs can bloat 3-4×. Output as high-quality JPEG
+        # instead (Facebook ads never need PNG transparency).
+        jpg_img = img_out.convert("RGB") if img_out.mode in ("RGBA", "P", "LA") else img_out
+        if jpg_img.mode != "RGB":
+            jpg_img = jpg_img.convert("RGB")
+        out_data = _save_jpeg(jpg_img, quality=92, subsampling=0)
+        fmt = "JPEG"
+        logger.info(f"[png→jpg] PNG converted to JPEG q=92: {len(out_data)/1024:.0f}KB")
     else:
         out_buf = io.BytesIO()
         img_out.save(out_buf, format=fmt)
