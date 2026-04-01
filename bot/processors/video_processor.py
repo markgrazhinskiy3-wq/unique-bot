@@ -158,6 +158,9 @@ def build_video_filter(info: dict) -> str:
     cb_gs = round(random.uniform(-0.010, -0.002), 3)
     cb_bs = round(random.uniform(0.002, 0.010), 3)
 
+    # Vignette: very slight corner darkening (angle between PI/5 and PI/4)
+    vignette_angle = round(random.uniform(0.60, 0.80), 3)
+
     filters = [
         f"crop={cropped_w}:{cropped_h}:{crop_left}:{crop_top}",
         f"scale={out_w}:{out_h}:flags=lanczos",
@@ -166,12 +169,13 @@ def build_video_filter(info: dict) -> str:
         f"eq=brightness={brightness}:contrast={contrast}:saturation={saturation}:gamma={gamma}",
         f"hue=h={hue_h}:s={hue_s}",
         f"colorbalance=rs={cb_rs}:gs={cb_gs}:bs={cb_bs}",
+        f"vignette=angle={vignette_angle}:mode=forward",
     ]
 
     logger.info(
         f"Video filter: crop=({crop_left},{crop_top},{crop_right},{crop_bottom}) "
         f"scale={out_w}x{out_h} rotate={angle_deg}° noise={noise_strength} "
-        f"colorbalance=rs={cb_rs}:gs={cb_gs}:bs={cb_bs}"
+        f"colorbalance=rs={cb_rs}:gs={cb_gs}:bs={cb_bs} vignette={vignette_angle}"
     )
     return ",".join(filters)
 
@@ -233,6 +237,21 @@ def process_video(input_path: str, output_path: str) -> None:
     audio_resample_rate = orig_sample_rate + random.choice([-1, 1])
     logger.info(f"Audio resample: {orig_sample_rate} → {audio_resample_rate} Hz")
 
+    # ── 4. B-frames randomization ─────────────────────────────────────────────
+    # B-frames change inter-frame reference structure — a structural fingerprint.
+    b_frames = random.choice([0, 2, 4])
+    logger.info(f"B-frames: {b_frames}")
+
+    # ── 5. H.264 profile ─────────────────────────────────────────────────────
+    # Profile is stored in the codec header and changes the file's capability flags.
+    h264_profile = random.choice(["main", "high"])
+    logger.info(f"H.264 profile: {h264_profile}")
+
+    # ── 6. Scene cut threshold ────────────────────────────────────────────────
+    # Controls where forced I-frames are inserted — changes keyframe positions.
+    sc_threshold = random.randint(25, 55)
+    logger.info(f"sc_threshold: {sc_threshold}")
+
     # Target original bitrate to preserve file size.
     orig_kbps = info["bitrate_kbps"]
     if orig_kbps > 0:
@@ -273,6 +292,9 @@ def process_video(input_path: str, output_path: str) -> None:
         # GOP randomization — changes keyframe structure
         "-g", str(gop_size),
         "-keyint_min", str(keyint_min),
+        "-bf", str(b_frames),
+        "-profile:v", h264_profile,
+        "-sc_threshold", str(sc_threshold),
         "-movflags", "+faststart",
         "-fflags", "+bitexact",
         "-flags:v", "+bitexact",

@@ -220,21 +220,64 @@ def step6_gaussian_noise(img: Image.Image, fmt: str = "JPEG") -> Image.Image:
     return img
 
 
-def _save_jpeg(img: Image.Image, quality: int) -> bytes:
+def step_chroma_shift(img: Image.Image) -> Image.Image:
+    if img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGB")
+
+    has_alpha = img.mode == "RGBA"
+    if has_alpha:
+        r, g, b, a = img.split()
+    else:
+        r, g, b = img.split()
+
+    channel_name = random.choice(["r", "g", "b"])
+    direction = random.choice([0, 1])
+    shift = random.choice([-1, 1])
+
+    channels = {"r": np.array(r), "g": np.array(g), "b": np.array(b)}
+    channels[channel_name] = np.roll(channels[channel_name], shift, axis=direction)
+
+    merged = (
+        Image.merge("RGBA", (
+            Image.fromarray(channels["r"], "L"),
+            Image.fromarray(channels["g"], "L"),
+            Image.fromarray(channels["b"], "L"),
+            a,
+        )) if has_alpha else
+        Image.merge("RGB", (
+            Image.fromarray(channels["r"], "L"),
+            Image.fromarray(channels["g"], "L"),
+            Image.fromarray(channels["b"], "L"),
+        ))
+    )
+
+    logger.info(f"[chroma_shift] channel={channel_name} axis={direction} shift={shift}px")
+    return merged
+
+
+def _save_jpeg(img: Image.Image, quality: int, subsampling: int = 0, progressive: bool = False) -> bytes:
     buf = io.BytesIO()
     img_save = img.convert("RGB") if img.mode == "RGBA" else img
-    img_save.save(buf, format="JPEG", quality=quality, subsampling=0)
+    kwargs: dict = {"format": "JPEG", "quality": quality, "subsampling": subsampling}
+    if progressive:
+        kwargs["progressive"] = True
+    img_save.save(buf, **kwargs)
     return buf.getvalue()
 
 
-def _find_jpeg_quality_for_size(img: Image.Image, target_bytes: int) -> int:
+def _find_jpeg_quality_for_size(
+    img: Image.Image,
+    target_bytes: int,
+    subsampling: int = 0,
+    progressive: bool = False,
+) -> int:
     lo, hi = 5, 95
     best_quality = 85
     best_diff = float("inf")
 
     for _ in range(10):
         mid = (lo + hi) // 2
-        data = _save_jpeg(img, mid)
+        data = _save_jpeg(img, mid, subsampling=subsampling, progressive=progressive)
         size = len(data)
         diff = abs(size - target_bytes)
         if diff < best_diff:
@@ -309,17 +352,27 @@ def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, st
     img = step4_zoom_crop(img)
     img = step5_color_shifts(img)
     img = step6_gaussian_noise(img, fmt)
+    img = step_chroma_shift(img)
     img = step7_reencode(img, fmt)
 
     img_out = img
     if fmt == "JPEG" and img.mode == "RGBA":
         img_out = img.convert("RGB")
 
+    # Random JPEG subsampling: 0=4:4:4, 1=4:2:2, 2=4:2:0 — changes DCT block structure
+    jpeg_subsampling = random.choice([0, 1, 2])
+    # Random progressive encoding — changes file byte structure
+    jpeg_progressive = random.choice([True, False])
+    logger.info(f"[jpeg] subsampling={jpeg_subsampling} progressive={jpeg_progressive}")
+
     if fmt == "JPEG":
-        quality = _find_jpeg_quality_for_size(img_out, original_file_size)
+        quality = _find_jpeg_quality_for_size(
+            img_out, original_file_size,
+            subsampling=jpeg_subsampling, progressive=jpeg_progressive,
+        )
         jitter = random.randint(-2, 2)
         quality = max(40, min(95, quality + jitter))
-        out_data = _save_jpeg(img_out, quality)
+        out_data = _save_jpeg(img_out, quality, subsampling=jpeg_subsampling, progressive=jpeg_progressive)
     elif fmt == "PNG":
         # Rotation/resize (LANCZOS) introduces sub-pixel interpolation artifacts
         # that defeat PNG compression.  A barely-perceptible blur removes them
