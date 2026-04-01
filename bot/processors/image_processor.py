@@ -254,7 +254,7 @@ def _find_jpeg_quality_for_size(img: Image.Image, target_bytes: int) -> int:
 
 def _save_png(img: Image.Image, compress_level: int) -> bytes:
     buf = io.BytesIO()
-    img.save(buf, format="PNG", compress_level=compress_level, optimize=False)
+    img.save(buf, format="PNG", compress_level=compress_level, optimize=True)
     return buf.getvalue()
 
 
@@ -321,6 +321,10 @@ def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, st
         quality = max(40, min(95, quality + jitter))
         out_data = _save_jpeg(img_out, quality)
     elif fmt == "PNG":
+        # Rotation/resize (LANCZOS) introduces sub-pixel interpolation artifacts
+        # that defeat PNG compression.  A barely-perceptible blur removes them
+        # while the geometric transforms already guarantee a strong pHash shift.
+        img_out = img_out.filter(ImageFilter.GaussianBlur(radius=0.4))
         compress_level = _find_png_compress_for_size(img_out, original_file_size)
         out_data = _save_png(img_out, compress_level)
     else:
