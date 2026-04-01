@@ -1,6 +1,7 @@
 import io
 import random
 import logging
+import datetime
 import numpy as np
 from PIL import Image, ImageFilter, ImageEnhance
 
@@ -139,9 +140,10 @@ def step5_color_shifts(img: Image.Image) -> Image.Image:
     if img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGB")
 
-    b_factor = 1.0 + random.uniform(-3, 3) / 255.0
-    c_factor = random.uniform(0.97, 1.03)
-    s_factor = random.uniform(0.97, 1.03)
+    # Slightly darken (-2 to -5%), increase contrast (4-8%), desaturate (88-96%)
+    b_factor = 1.0 + random.uniform(-5, -2) / 100.0
+    c_factor = random.uniform(1.04, 1.08)
+    s_factor = random.uniform(0.88, 0.96)
 
     img = ImageEnhance.Brightness(img).enhance(b_factor)
     img = ImageEnhance.Contrast(img).enhance(c_factor)
@@ -156,7 +158,7 @@ def step5_color_shifts(img: Image.Image) -> Image.Image:
     else:
         img = ImageEnhance.Color(img).enhance(s_factor)
 
-    hue_shift = random.uniform(-2, 2)
+    hue_shift = random.uniform(3, 6) * random.choice([-1, 1])
     try:
         img_hsv = img.convert("RGB") if img.mode == "RGBA" else img
         arr = np.array(img_hsv, dtype=np.float32) / 255.0
@@ -255,6 +257,95 @@ def step_chroma_shift(img: Image.Image) -> Image.Image:
     return merged
 
 
+def step_downscale_upscale(img: Image.Image) -> Image.Image:
+    w, h = img.size
+    scale = random.uniform(0.90, 0.95)
+    ds_w = max(int(w * scale) & ~1, 4)
+    ds_h = max(int(h * scale) & ~1, 4)
+    downscaled = img.resize((ds_w, ds_h), Image.BICUBIC)
+    result = downscaled.resize((w, h), Image.LANCZOS)
+    logger.info(f"[downscale_upscale] orig={w}x{h} temp={ds_w}x{ds_h} scale={scale:.3f}")
+    return result
+
+
+def step_vignette(img: Image.Image) -> Image.Image:
+    if img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGB")
+    has_alpha = img.mode == "RGBA"
+    w, h = img.size
+    arr = np.array(img, dtype=np.float32)
+    cx, cy = w / 2.0, h / 2.0
+    Y, X = np.ogrid[:h, :w]
+    dist_norm = np.sqrt(((X - cx) / cx) ** 2 + ((Y - cy) / cy) ** 2) / np.sqrt(2)
+    strength = random.uniform(0.02, 0.04)
+    mask = np.clip(1.0 - strength * (dist_norm ** 2), 0, 1).astype(np.float32)
+    if has_alpha:
+        arr[:, :, :3] = np.clip(arr[:, :, :3] * mask[:, :, np.newaxis], 0, 255)
+    else:
+        arr = np.clip(arr * mask[:, :, np.newaxis], 0, 255)
+    result = Image.fromarray(arr.astype(np.uint8), mode=img.mode)
+    logger.info(f"[vignette] strength={strength:.3f}")
+    return result
+
+
+def step_unsharp_mask(img: Image.Image) -> Image.Image:
+    radius = round(random.uniform(0.3, 0.6), 2)
+    percent = random.randint(80, 130)
+    result = img.filter(ImageFilter.UnsharpMask(radius=radius, percent=percent, threshold=0))
+    logger.info(f"[unsharp_mask] radius={radius} percent={percent}")
+    return result
+
+
+def _inject_fake_exif(jpeg_bytes: bytes) -> bytes:
+    try:
+        import piexif
+        cameras = [
+            ("Canon", "Canon EOS R6"),
+            ("Nikon", "NIKON Z 6_2"),
+            ("Sony", "ILCE-7M4"),
+            ("Apple", "iPhone 15 Pro"),
+            ("Samsung", "SM-S918B"),
+        ]
+        make, model = random.choice(cameras)
+        days_ago = random.randint(1, 365)
+        rand_dt = datetime.datetime.now() - datetime.timedelta(
+            days=days_ago,
+            hours=random.randint(0, 23),
+            minutes=random.randint(0, 59),
+            seconds=random.randint(0, 59),
+        )
+        dt_str = rand_dt.strftime("%Y:%m:%d %H:%M:%S").encode()
+        software_options = [
+            b"Adobe Photoshop 25.5.0",
+            b"Adobe Photoshop 26.1.0",
+            b"Adobe Lightroom 13.3",
+            b"Adobe Lightroom Classic 13.4",
+        ]
+        software = random.choice(software_options)
+        exif_dict = {
+            "0th": {
+                piexif.ImageIFD.Make: make.encode(),
+                piexif.ImageIFD.Model: model.encode(),
+                piexif.ImageIFD.Software: software,
+                piexif.ImageIFD.DateTime: dt_str,
+            },
+            "Exif": {
+                piexif.ExifIFD.DateTimeOriginal: dt_str,
+                piexif.ExifIFD.DateTimeDigitized: dt_str,
+            },
+            "GPS": {},
+            "1st": {},
+            "thumbnail": None,
+        }
+        exif_bytes = piexif.dump(exif_dict)
+        result = piexif.insert(exif_bytes, jpeg_bytes)
+        logger.info(f"[fake_exif] make={make} model={model} software={software.decode()} date={dt_str.decode()}")
+        return result
+    except Exception as e:
+        logger.warning(f"[fake_exif] Failed: {e}")
+        return jpeg_bytes
+
+
 def _save_jpeg(img: Image.Image, quality: int, subsampling: int = 0, progressive: bool = False) -> bytes:
     buf = io.BytesIO()
     img_save = img.convert("RGB") if img.mode == "RGBA" else img
@@ -350,9 +441,12 @@ def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, st
     img = step2_pad_and_asymmetric_crop(img)
     img = step3_rotation(img)
     img = step4_zoom_crop(img)
+    img = step_downscale_upscale(img)
     img = step5_color_shifts(img)
     img = step6_gaussian_noise(img, fmt)
     img = step_chroma_shift(img)
+    img = step_vignette(img)
+    img = step_unsharp_mask(img)
     img = step7_reencode(img, fmt)
 
     img_out = img
@@ -365,6 +459,7 @@ def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, st
     jpeg_progressive = random.choice([True, False])
     logger.info(f"[jpeg] subsampling={jpeg_subsampling} progressive={jpeg_progressive}")
 
+    quality = 85
     if fmt == "JPEG":
         quality = _find_jpeg_quality_for_size(
             img_out, original_file_size,
@@ -373,10 +468,9 @@ def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, st
         jitter = random.randint(-2, 2)
         quality = max(40, min(95, quality + jitter))
         out_data = _save_jpeg(img_out, quality, subsampling=jpeg_subsampling, progressive=jpeg_progressive)
+        # Inject fake EXIF (camera brand, model, software, random shoot date)
+        out_data = _inject_fake_exif(out_data)
     elif fmt == "PNG":
-        # Rotation/resize (LANCZOS) introduces sub-pixel interpolation artifacts
-        # that defeat PNG compression.  A barely-perceptible blur removes them
-        # while the geometric transforms already guarantee a strong pHash shift.
         img_out = img_out.filter(ImageFilter.GaussianBlur(radius=0.4))
         compress_level = _find_png_compress_for_size(img_out, original_file_size)
         out_data = _save_png(img_out, compress_level)
