@@ -39,13 +39,14 @@ def step2_pad_and_asymmetric_crop(img: Image.Image) -> Image.Image:
 
     arr = np.array(img.convert("RGB") if img.mode not in ("RGB", "RGBA") else img)
     padded = np.pad(arr, ((4, 4), (4, 4), (0, 0)), mode="edge")
-    padded_img = Image.fromarray(padded.astype(np.uint8), mode="RGB" if arr.ndim == 3 else img.mode)
-
-    if img.mode == "RGBA":
-        alpha = np.array(img.split()[3])
-        alpha_pad = np.pad(alpha, ((4, 4), (4, 4)), mode="edge")
-        r, g, b = padded_img.split()
-        padded_img = Image.merge("RGBA", (r, g, b, Image.fromarray(alpha_pad, "L")))
+    # Determine correct mode from actual channel count to avoid corruption:
+    # RGBA arrays have shape (H, W, 4) — creating an "RGB" image from them
+    # causes PIL to misinterpret the byte layout → tiling / severe distortion.
+    if padded.ndim == 3:
+        padded_mode = "RGBA" if padded.shape[2] == 4 else "RGB"
+    else:
+        padded_mode = "L"
+    padded_img = Image.fromarray(padded.astype(np.uint8), mode=padded_mode)
 
     pw, ph = padded_img.size
 
