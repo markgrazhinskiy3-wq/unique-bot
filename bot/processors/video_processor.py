@@ -321,12 +321,6 @@ def process_video(input_path: str, output_path: str) -> None:
         "-keyint_min", str(keyint_min),
         "-bf", str(b_frames),
         "-profile:v", h264_profile,
-        "-level:v", "4.0",
-        "-sc_threshold", str(sc_threshold),
-        # Color space tag — changes stream header (bt709 vs bt601/smpte170m)
-        "-colorspace", colorspace,
-        "-color_primaries", colorspace,
-        "-color_trc", colorspace,
         "-movflags", "+faststart",
     ]
 
