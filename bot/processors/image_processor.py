@@ -201,12 +201,13 @@ def step6_gaussian_noise(img: Image.Image, fmt: str = "JPEG") -> Image.Image:
         rgb = img
 
     arr = np.array(rgb, dtype=np.float32)
-    # PNG is lossless — high noise destroys compression and inflates file 3-5x.
-    # For PNG use tiny sigma; geometric transforms already ensure pHash distance.
+    # PNG is lossless — even tiny noise inflates files 3-5x because random
+    # per-pixel variation is incompressible. Skip noise for PNG entirely;
+    # crop + downscale/upscale + color shifts already guarantee a unique file.
     if fmt == "PNG":
-        sigma = random.uniform(0.5, 1.2)
-    else:
-        sigma = random.uniform(3.0, 6.0)
+        logger.info(f"[noise] skipped for PNG (lossless compression)")
+        return img
+    sigma = random.uniform(3.0, 6.0)
     noise = np.random.normal(0, sigma, arr.shape).astype(np.float32)
     arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
     rgb_out = Image.fromarray(arr, mode="RGB")
@@ -471,9 +472,7 @@ def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, st
         # Inject fake EXIF (camera brand, model, software, random shoot date)
         out_data = _inject_fake_exif(out_data)
     elif fmt == "PNG":
-        img_out = img_out.filter(ImageFilter.GaussianBlur(radius=0.4))
-        compress_level = _find_png_compress_for_size(img_out, original_file_size)
-        out_data = _save_png(img_out, compress_level)
+        out_data = _save_png(img_out, compress_level=9)
     else:
         out_buf = io.BytesIO()
         img_out.save(out_buf, format=fmt)
