@@ -185,7 +185,7 @@ def step5_color_shifts(img: Image.Image) -> Image.Image:
     return img
 
 
-def step6_gaussian_noise(img: Image.Image) -> Image.Image:
+def step6_gaussian_noise(img: Image.Image, fmt: str = "JPEG") -> Image.Image:
     _sample_pixels(img, "before_noise")
 
     if img.mode not in ("RGB", "RGBA"):
@@ -199,7 +199,12 @@ def step6_gaussian_noise(img: Image.Image) -> Image.Image:
         rgb = img
 
     arr = np.array(rgb, dtype=np.float32)
-    sigma = random.uniform(3.0, 6.0)
+    # PNG is lossless — high noise destroys compression and inflates file 3-5x.
+    # For PNG use tiny sigma; geometric transforms already ensure pHash distance.
+    if fmt == "PNG":
+        sigma = random.uniform(0.5, 1.2)
+    else:
+        sigma = random.uniform(3.0, 6.0)
     noise = np.random.normal(0, sigma, arr.shape).astype(np.float32)
     arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
     rgb_out = Image.fromarray(arr, mode="RGB")
@@ -210,7 +215,7 @@ def step6_gaussian_noise(img: Image.Image) -> Image.Image:
     else:
         img = rgb_out
 
-    logger.info(f"[noise] sigma={sigma:.2f}")
+    logger.info(f"[noise] sigma={sigma:.2f} fmt={fmt}")
     _sample_pixels(img, "after_noise")
     return img
 
@@ -303,7 +308,7 @@ def process_image(image_bytes: bytes, original_filename: str) -> tuple[bytes, st
     img = step3_rotation(img)
     img = step4_zoom_crop(img)
     img = step5_color_shifts(img)
-    img = step6_gaussian_noise(img)
+    img = step6_gaussian_noise(img, fmt)
     img = step7_reencode(img, fmt)
 
     img_out = img
