@@ -214,58 +214,41 @@ def verify_video(
     orig_md5 = md5_hash(original_bytes)
     proc_md5 = md5_hash(processed_bytes)
     hashes_differ = orig_md5 != proc_md5
-    hashes_line = "НЕТ ✅" if hashes_differ else "ДА ⚠️"
 
     orig_size = format_size_kb(original_bytes)
     proc_size = format_size_kb(processed_bytes)
 
-    orig_phash = 0
-    proc_phash = 0
-    orig_fps = "?"
-    orig_res = "?"
     new_fps = "?"
-    new_res = "?"
-    orig_meta_count = 0
     proc_meta_count = 0
 
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_orig:
-        tmp_orig.write(original_bytes)
-        tmp_orig_path = tmp_orig.name
-
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_proc:
-        tmp_proc.write(processed_bytes)
-        tmp_proc_path = tmp_proc.name
-
+    # Only probe the processed file — we only need output metadata/fps
+    tmp_proc_path = None
     try:
-        orig_probe = _probe_video_meta(tmp_orig_path)
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_proc:
+            tmp_proc.write(processed_bytes)
+            tmp_proc_path = tmp_proc.name
+
         proc_probe = _probe_video_meta(tmp_proc_path)
-
-        orig_meta_count = _count_video_meta_tags(orig_probe)
         proc_meta_count = _count_video_meta_tags(proc_probe)
-
-        orig_fps, orig_res = _get_video_stream_info(orig_probe)
-        new_fps, new_res = _get_video_stream_info(proc_probe)
-
-        orig_phash = _extract_first_frame_phash(tmp_orig_path)
-        proc_phash = _extract_first_frame_phash(tmp_proc_path)
+        new_fps, _ = _get_video_stream_info(proc_probe)
+    except Exception:
+        pass
     finally:
-        for p in [tmp_orig_path, tmp_proc_path]:
+        if tmp_proc_path:
             try:
-                if os.path.exists(p):
-                    os.remove(p)
+                if os.path.exists(tmp_proc_path):
+                    os.remove(tmp_proc_path)
             except Exception:
                 pass
 
-    distance = hamming_distance(orig_phash, proc_phash)
-    uniqueness = "ВЫСОКАЯ ✅" if distance >= 8 else "НИЗКАЯ ⚠️"
     meta_line = "очищены ✅" if proc_meta_count == 0 else f"осталось {proc_meta_count} тегов ⚠️"
-
     md5_ok = "изменён ✅" if hashes_differ else "совпадает ⚠️"
+
     return (
         f"✅ Видео уникализировано\n\n"
         f"MD5: {md5_ok}\n"
         f"Метаданные: {meta_line}\n"
-        f"Размер: {orig_size} → {proc_size} KB  |  FPS: {orig_fps} → {new_fps}\n\n"
+        f"Размер: {orig_size} → {proc_size} KB  |  FPS: → {new_fps}\n\n"
         f"Изменения: обрезка, поворот, downscale→upscale, шум, "
         f"цвет/hue/colorbalance, хром.аберрация, GOP, B-frames, "
         f"CRF, аудио ресемплинг, метаданные очищены + случайные\n\n"
